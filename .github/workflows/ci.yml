@@ -14,7 +14,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          go-version: "1.25.7"
       - uses: golangci/golangci-lint-action@v6
         with:
           version: latest
@@ -26,7 +26,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          go-version: "1.25.7"
       - name: Run all unit tests
         run: go test -race ./...
 
@@ -37,7 +37,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          go-version: "1.25.7"
       - name: Test gateway packages
         run: go test -race -v ./internal/gateway/...
 
@@ -49,7 +49,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.25"
+          go-version: "1.25.7"
       - name: Build gateway
         run: go build -o bin/gateway ./cmd/gateway
       - name: Build simulator
