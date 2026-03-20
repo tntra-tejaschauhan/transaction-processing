@@ -1,0 +1,45 @@
+# --- Build output ---
+bin/
+dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# --- Go ---
+vendor/
+*.test
+*.out
+coverage.txt
+coverage.html
+
+# --- IDE ---
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Environment / secrets ---
+.env
+.env.*
+*.pem
+*.key
+*.p12
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Docker ---
+docker-compose.override.yml
+
+# --- Test output ---
+test-results/
+bin/
