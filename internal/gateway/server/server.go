@@ -197,22 +197,12 @@ func (s *Server) acceptLoop(ctx context.Context) {
 	}
 }
 
-// handleConn is the placeholder connection handler.
-// TASK-4 will replace this with the full read/write loop.
+// handleConn delegates connection lifecycle to Conn.
+// Called from acceptLoop — each invocation runs in its own goroutine.
+// WaitGroup and semaphore release are managed by the caller in acceptLoop.
 func (s *Server) handleConn(ctx context.Context, conn net.Conn) {
-	defer conn.Close() //nolint:errcheck // Close error not actionable here
-
-	s.logger.Info().
-		Str("remote_addr", conn.RemoteAddr().String()).
-		Msg("connection accepted")
-
-	// Wait for context cancel or connection close.
-	// Full ISO 8583 read loop is implemented in TASK-4 (connection.go).
-	<-ctx.Done()
-
-	s.logger.Info().
-		Str("remote_addr", conn.RemoteAddr().String()).
-		Msg("connection closed")
+	c := newConn(conn, s.opts, s.logger)
+	c.handle(ctx)
 }
 
 // isNetError is a helper that type-asserts err to net.Error.
