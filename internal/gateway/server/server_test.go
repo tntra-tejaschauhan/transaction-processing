@@ -242,3 +242,51 @@ func (s *testSuiteServer) TestStart_ContextCancelled() {
 		}
 	})
 }
+
+// ── isNetError / asNetError ───────────────────────────────────────────────────
+
+// mockNetError implements net.Error for testing without real network calls.
+type mockNetError struct {
+	timeout   bool
+	temporary bool
+}
+
+func (e *mockNetError) Error() string   { return "mock net error" }
+func (e *mockNetError) Timeout() bool   { return e.timeout }
+func (e *mockNetError) Temporary() bool { return e.temporary }
+
+func (s *testSuiteServer) TestIsNetError_WithNetError() {
+	s.Run("when err is net.Error then isNetError returns true and sets target", func() {
+		mock := &mockNetError{timeout: true}
+		var target net.Error
+		ok := isNetError(mock, &target)
+		s.Assert().True(ok)
+		s.Assert().True(target.Timeout())
+	})
+}
+
+func (s *testSuiteServer) TestIsNetError_WithNonNetError() {
+	s.Run("when err is not net.Error then isNetError returns false", func() {
+		var target net.Error
+		ok := isNetError(fmt.Errorf("plain error"), &target)
+		s.Assert().False(ok)
+	})
+}
+
+func (s *testSuiteServer) TestAsNetError_WithNetError() {
+	s.Run("when err is net.Error then asNetError returns true and populates target", func() {
+		mock := &mockNetError{timeout: false}
+		var target net.Error
+		ok := asNetError(mock, &target)
+		s.Assert().True(ok)
+		s.Assert().False(target.Timeout())
+	})
+}
+
+func (s *testSuiteServer) TestAsNetError_WithNonNetError() {
+	s.Run("when err is not net.Error then asNetError returns false", func() {
+		var target net.Error
+		ok := asNetError(fmt.Errorf("not a net error"), &target)
+		s.Assert().False(ok)
+	})
+}

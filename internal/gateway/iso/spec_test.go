@@ -1,6 +1,7 @@
 package iso_test
 
 import (
+	"net"
 	"testing"
 
 	"github.com/moov-io/iso8583"
@@ -61,9 +62,37 @@ func TestUnpackMalformedPayload(t *testing.T) {
 	assert.Error(t, err, "Unpack of a malformed payload must return an error, not panic")
 }
 
-// TestNetworkHeaderFraming verifies that the binary 2-byte length prefix
-// correctly frames a message of a known size.
-// Example: a 115-byte message must produce the header bytes {0x00, 0x73}.
+// TestNewNetworkHeader verifies that NewNetworkHeader returns a functional
+// Binary2Bytes framer that correctly encodes and decodes the 2-byte length
+// prefix over a real in-process pipe.
+func TestNewNetworkHeader(t *testing.T) {
+	t.Run("WriteTo then ReadFrom round-trips the message length correctly", func(t *testing.T) {
+		client, server := net.Pipe()
+		defer client.Close()
+		defer server.Close()
+
+		const testLen = 115 // arbitrary message length
+
+		// Writer side — use NewNetworkHeader to write the length prefix.
+		writeErr := make(chan error, 1)
+		go func() {
+			h := iso.NewNetworkHeader()
+			_ = h.SetLength(testLen)
+			_, err := h.WriteTo(client)
+			writeErr <- err
+		}()
+
+		// Reader side — use a fresh NewNetworkHeader to read it back.
+		h := iso.NewNetworkHeader()
+		_, err := h.ReadFrom(server)
+		require.NoError(t, err)
+		assert.Equal(t, testLen, h.Length(), "decoded length must match the written length")
+		require.NoError(t, <-writeErr)
+	})
+}
+
+// TestNetworkHeaderFraming verifies the header's byte-level encoding:
+// a 115-byte payload must be framed as {0x00, 0x73}.
 func TestNetworkHeaderFraming(t *testing.T) {
 	// Build a minimal 0800 message and pack it.
 	req := iso.EchoRequest{
@@ -77,10 +106,11 @@ func TestNetworkHeaderFraming(t *testing.T) {
 	packed, err := msg.Pack()
 	require.NoError(t, err)
 
-	// WriteLength writes 2 bytes; verify the header length matches packed length.
+	// Verify the header length matches packed length using manual bytes.
 	expectedLen := len(packed)
 	headerBytes := []byte{byte(expectedLen >> 8), byte(expectedLen)}
 	assert.Equal(t, 2, len(headerBytes), "Network header must always be 2 bytes")
 	assert.Equal(t, byte(expectedLen>>8), headerBytes[0])
 	assert.Equal(t, byte(expectedLen&0xff), headerBytes[1])
 }
+

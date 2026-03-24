@@ -67,6 +67,10 @@ func (c *Conn) handle(ctx context.Context) {
 // and the response is packed and written back with the same framing.
 //
 // Exit condition: returns nil on ctx cancel, non-nil error on read/write failure.
+// readLoop reads ISO 8583 frames until the connection closes or ctx is cancelled.
+//
+// Frame format: 2-byte big-endian length prefix + ISO 8583 message body.
+// Each frame is handed to processFrame. Returns nil on ctx cancel, non-nil on error.
 func (c *Conn) readLoop(ctx context.Context) error {
 	for {
 		// Check context cancellation before blocking on a read.
@@ -76,60 +80,79 @@ func (c *Conn) readLoop(ctx context.Context) error {
 		default:
 		}
 
-		// HARD RULE (§4.6): explicit read deadline before every blocking read.
-		if err := c.conn.SetReadDeadline(time.Now().Add(c.opts.ReadTimeout)); err != nil {
-			return fmt.Errorf("set read deadline: %w", err)
-		}
-
-		// Read the 2-byte big-endian length prefix using moov-io framer.
-		header := iso.NewNetworkHeader()
-		if _, err := header.ReadFrom(c.conn); err != nil {
-			return fmt.Errorf("read length prefix: %w", err)
-		}
-
-		msgLen := header.Length()
-		if msgLen == 0 {
-			return fmt.Errorf("read length prefix: zero-length frame received")
-		}
-
-		// Set a fresh read deadline for the body read.
-		if err := c.conn.SetReadDeadline(time.Now().Add(c.opts.ReadTimeout)); err != nil {
-			return fmt.Errorf("set read deadline for body: %w", err)
-		}
-
-		// Read the full message body.
-		msgBuf := make([]byte, msgLen)
-		if _, err := io.ReadFull(c.conn, msgBuf); err != nil {
-			return fmt.Errorf("read message body (%d bytes): %w", msgLen, err)
-		}
-
-		c.logger.Debug().Int("msg_len", int(msgLen)).Msg("frame received")
-
-		// Unpack raw bytes into an ISO 8583 message.
-		inMsg := iso8583.NewMessage(iso.DiscoverSpec)
-		if err := inMsg.Unpack(msgBuf); err != nil {
-			return fmt.Errorf("unpack iso8583 message: %w", err)
-		}
-
-		// Dispatch to handler — returns the response message.
-		outMsg, err := iso.HandleMessage(inMsg)
+		// Delegate the read→unpack→handle→write pipeline for one frame.
+		// processFrame returns (true, nil) on a handled error to continue,
+		// or (false, err) on a fatal error to stop the loop.
+		skip, err := c.processFrame()
 		if err != nil {
-			// Log and continue — unknown MTI should not kill the connection.
-			c.logger.Warn().Err(err).Msg("handle message error")
+			return err
+		}
+		if skip {
 			continue
 		}
-
-		// Pack the response message back to raw bytes.
-		responseBytes, err := outMsg.Pack()
-		if err != nil {
-			return fmt.Errorf("pack iso8583 response: %w", err)
-		}
-
-		// Write the response with 2-byte length prefix.
-		if err := c.write(responseBytes); err != nil {
-			return fmt.Errorf("write response: %w", err)
-		}
 	}
+}
+
+// processFrame performs the full read→unpack→dispatch→write cycle for a
+// single ISO 8583 frame. It returns (true, nil) when the frame was handled
+// but the caller should continue reading (e.g. unknown MTI), or (false, err)
+// when a fatal I/O or parsing error occurred.
+func (c *Conn) processFrame() (skip bool, err error) {
+	// HARD RULE (§4.6): explicit read deadline before every blocking read.
+	if err := c.conn.SetReadDeadline(time.Now().Add(c.opts.ReadTimeout)); err != nil {
+		return false, fmt.Errorf("set read deadline: %w", err)
+	}
+
+	// Read the 2-byte big-endian length prefix using moov-io framer.
+	header := iso.NewNetworkHeader()
+	if _, err := header.ReadFrom(c.conn); err != nil {
+		return false, fmt.Errorf("read length prefix: %w", err)
+	}
+
+	msgLen := header.Length()
+	if msgLen == 0 {
+		return false, fmt.Errorf("read length prefix: zero-length frame received")
+	}
+
+	// Set a fresh read deadline for the body read.
+	if err := c.conn.SetReadDeadline(time.Now().Add(c.opts.ReadTimeout)); err != nil {
+		return false, fmt.Errorf("set read deadline for body: %w", err)
+	}
+
+	// Read the full message body.
+	msgBuf := make([]byte, msgLen)
+	if _, err := io.ReadFull(c.conn, msgBuf); err != nil {
+		return false, fmt.Errorf("read message body (%d bytes): %w", msgLen, err)
+	}
+
+	c.logger.Debug().Int("msg_len", int(msgLen)).Msg("frame received")
+
+	// Unpack raw bytes into an ISO 8583 message.
+	inMsg := iso8583.NewMessage(iso.DiscoverSpec)
+	if err := inMsg.Unpack(msgBuf); err != nil {
+		return false, fmt.Errorf("unpack iso8583 message: %w", err)
+	}
+
+	// Dispatch to handler — returns the response message.
+	outMsg, err := iso.HandleMessage(inMsg)
+	if err != nil {
+		// Unknown MTI — log and signal caller to continue reading.
+		c.logger.Warn().Err(err).Msg("handle message error")
+		return true, nil
+	}
+
+	// Pack the response message back to raw bytes.
+	responseBytes, err := outMsg.Pack()
+	if err != nil {
+		return false, fmt.Errorf("pack iso8583 response: %w", err)
+	}
+
+	// Write the response with 2-byte length prefix.
+	if err := c.write(responseBytes); err != nil {
+		return false, fmt.Errorf("write response: %w", err)
+	}
+
+	return false, nil
 }
 
 // write sends data to the client using the moov-io 2-byte network header.

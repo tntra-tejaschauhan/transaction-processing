@@ -270,3 +270,103 @@ func (s *testSuiteConn) TestIsGracefulClose_OtherError() {
 		s.Assert().False(isGracefulClose(err))
 	})
 }
+
+func (s *testSuiteConn) TestIsGracefulClose_NetErrClosed() {
+	s.Run("when error contains net.ErrClosed then isGracefulClose returns true", func() {
+		// Simulate what net returns when we close a connection ourselves.
+		// Dial a real port, close it, then read — gives an OpError wrapping ErrClosed.
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		s.Require().NoError(err)
+		defer ln.Close()
+
+		conn, err := net.Dial("tcp", ln.Addr().String())
+		s.Require().NoError(err)
+		conn.Close() // close our side first
+
+		// Reading from a closed conn returns an OpError containing net.ErrClosed.
+		_, readErr := conn.Read(make([]byte, 1))
+		s.Require().Error(readErr)
+		s.Assert().True(isGracefulClose(readErr), "OpError wrapping ErrClosed must be graceful")
+	})
+}
+
+// ── processFrame ──────────────────────────────────────────────────────────────
+
+func (s *testSuiteConn) TestProcessFrame_WriteDeadlineError() {
+	s.Run("when write deadline is too short then processFrame returns a write error", func() {
+		opts := testConnOpts()
+		opts.WriteTimeout = 1 * time.Millisecond // too short to complete write
+
+		c, client := testConn(opts)
+
+		handleDone := make(chan struct{})
+		go func() {
+			defer close(handleDone)
+			c.handle(context.Background())
+		}()
+
+		// Build and send a valid 0800 so processFrame gets to the write path.
+		req := iso.EchoRequest{STAN: "111111", NetworkMgmtInfoCode: "301"}
+		msg := iso8583.NewMessage(iso.DiscoverSpec)
+		s.Require().NoError(msg.Marshal(&req))
+		msg.MTI("0800")
+		packed, err := msg.Pack()
+		s.Require().NoError(err)
+
+		header := iso.NewNetworkHeader()
+		s.Require().NoError(header.SetLength(len(packed)))
+		_, err = header.WriteTo(client)
+		s.Require().NoError(err)
+		_, err = client.Write(packed)
+		s.Require().NoError(err)
+
+		// Do NOT read the response — this causes the server's write to block
+		// and eventually fail when the 1ms write deadline fires.
+		select {
+		case <-handleDone:
+			// handle exited due to write error — correct
+		case <-time.After(2 * time.Second):
+			s.Fail("handle did not exit after write deadline")
+		}
+		client.Close()
+	})
+}
+
+func (s *testSuiteConn) TestReadLoop_UnknownMTI_ContinuesLoop() {
+	s.Run("when client sends unknown MTI then loop continues and does not exit", func() {
+		c, client := testConn(testConnOpts())
+
+		ctx, cancel := context.WithCancel(context.Background())
+		handleDone := make(chan struct{})
+		go func() {
+			defer close(handleDone)
+			c.handle(ctx)
+		}()
+
+		// Send an 0200 message (unknown MTI to our handler).
+		unknownMsg := iso8583.NewMessage(iso.DiscoverSpec)
+		unknownMsg.MTI("0200")
+		packed, err := unknownMsg.Pack()
+		s.Require().NoError(err)
+
+		header := iso.NewNetworkHeader()
+		s.Require().NoError(header.SetLength(len(packed)))
+		_, err = header.WriteTo(client)
+		s.Require().NoError(err)
+		_, err = client.Write(packed)
+		s.Require().NoError(err)
+
+		// Server should NOT close — give it a moment then cancel context.
+		time.Sleep(50 * time.Millisecond)
+		select {
+		case <-handleDone:
+			s.Fail("handle should not have exited on unknown MTI")
+		default:
+			// correct — still running
+		}
+
+		cancel()
+		client.Close()
+		<-handleDone
+	})
+}
