@@ -16,7 +16,7 @@ import (
 	"github.com/PayWithSpireInc/transaction-processing/api/gateway"
 )
 
-func main1() {
+func main() {
 	// Parse command-line flags.
 	host := flag.String("host", "localhost", "gateway host")
 	port := flag.String("port", "8583", "gateway port")
