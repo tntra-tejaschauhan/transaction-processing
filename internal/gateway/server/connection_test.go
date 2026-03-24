@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/PayWithSpireInc/transaction-processing/internal/gateway/iso"
+	"github.com/moov-io/iso8583"
 	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/suite"
 )
@@ -32,18 +34,6 @@ func testConnOpts() *ServerOptions {
 		MaxConnections:  10,
 		ShutdownTimeout: 2 * time.Second,
 	}
-}
-
-// writeFrame writes a framed message to w: 2-byte big-endian length + body.
-// Helper used by tests to simulate a card network client sending a message.
-func writeFrame(w io.Writer, body []byte) error {
-	lenBuf := make([]byte, 2)
-	binary.BigEndian.PutUint16(lenBuf, uint16(len(body)))
-	if _, err := w.Write(lenBuf); err != nil {
-		return err
-	}
-	_, err := w.Write(body)
-	return err
 }
 
 // readFrame reads a framed message from r: 2-byte length prefix + body.
@@ -102,7 +92,7 @@ func (s *testSuiteConn) TestWrite_SetsWriteDeadline() {
 		// net.Pipe is synchronous: Write blocks until the other side reads.
 		err := c.write([]byte("data"))
 		s.Require().Error(err)
-		s.Assert().Contains(err.Error(), "write frame")
+		s.Assert().Contains(err.Error(), "write length prefix")
 	})
 }
 
@@ -114,22 +104,53 @@ func (s *testSuiteConn) TestReadLoop_ReceivesFrameAndEchoes() {
 
 		ctx, cancel := context.WithCancel(context.Background())
 
-		// Run handle in background — it drives the read loop.
 		handleDone := make(chan struct{})
 		go func() {
 			defer close(handleDone)
 			c.handle(ctx)
 		}()
 
-		payload := []byte("test-message")
-		s.Require().NoError(writeFrame(client, payload))
-
-		// Read the echoed response.
-		received, err := readFrame(client)
+		// Build a real packed 0800 message.
+		req := iso.EchoRequest{
+			STAN:                "123456",
+			NetworkMgmtInfoCode: "301",
+		}
+		msg := iso8583.NewMessage(iso.DiscoverSpec)
+		s.Require().NoError(msg.Marshal(&req))
+		msg.MTI("0800")
+		packed, err := msg.Pack()
 		s.Require().NoError(err)
-		s.Assert().Equal(payload, received)
 
-		// Cancel context → handle exits cleanly.
+		// Send it with 2-byte length prefix using moov-io framer.
+		header := iso.NewNetworkHeader()
+		s.Require().NoError(header.SetLength(len(packed)))
+		_, err = header.WriteTo(client)
+		s.Require().NoError(err)
+		_, err = client.Write(packed)
+		s.Require().NoError(err)
+
+		// Read the 0810 response — 2-byte prefix first.
+		respHeader := iso.NewNetworkHeader()
+		_, err = respHeader.ReadFrom(client)
+		s.Require().NoError(err)
+
+		respBuf := make([]byte, respHeader.Length())
+		_, err = io.ReadFull(client, respBuf)
+		s.Require().NoError(err)
+
+		// Unpack and verify it is a valid 0810.
+		respMsg := iso8583.NewMessage(iso.DiscoverSpec)
+		s.Require().NoError(respMsg.Unpack(respBuf))
+
+		mti, err := respMsg.GetMTI()
+		s.Require().NoError(err)
+		s.Assert().Equal("0810", mti)
+
+		var resp iso.EchoResponse
+		s.Require().NoError(respMsg.Unmarshal(&resp))
+		s.Assert().Equal("123456", resp.STAN)
+		s.Assert().Equal("00", resp.ResponseCode)
+
 		cancel()
 		client.Close()
 		<-handleDone

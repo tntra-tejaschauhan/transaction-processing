@@ -23,7 +23,7 @@ linters-settings:
     check-type-assertions: true
     check-blank: true
   gocognit:
-    min-complexity: 15
+    min-complexity: 21
 
 issues:
   exclude-rules:

@@ -11,7 +11,6 @@ import (
 
 type testSuiteServerOptions struct {
 	suite.Suite
-	configPath string
 }
 
 func TestServerOptions(t *testing.T) {
