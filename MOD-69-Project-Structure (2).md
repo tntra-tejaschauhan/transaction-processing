@@ -108,3 +108,19 @@ transaction-processing-develop/
   • Do NOT create a new go.mod — extend the existing monorepo module
   • E2E tests in api/gateway/ use //go:build e2e tag (excluded from go test ./...)
   • The `server` file at repo root is an existing artifact — do not modify or delete it
+
+
+-------------------------------------------------------
+build-gateway:
+	go build -o bin/gateway ./cmd/gateway
+
+build-simulator:
+	go build -o bin/simulator ./cmd/simulator
+
+run simulator:
+
+./bin/gateway 
+./bin/simulator --stan 999999 --code 999
+
+stop app :
+pkill -f "bin/gateway" || true
