@@ -332,8 +332,8 @@ func (s *testSuiteConn) TestProcessFrame_WriteDeadlineError() {
 	})
 }
 
-func (s *testSuiteConn) TestReadLoop_UnknownMTI_ContinuesLoop() {
-	s.Run("when client sends unknown MTI then loop continues and does not exit", func() {
+func (s *testSuiteConn) TestReadLoop_UnknownMTI_Sends0810F39_12_AndContinues() {
+	s.Run("when client sends unknown MTI then server sends 0810 F39=12 and connection stays open", func() {
 		c, client := testConn(testConnOpts())
 
 		ctx, cancel := context.WithCancel(context.Background())
@@ -343,9 +343,9 @@ func (s *testSuiteConn) TestReadLoop_UnknownMTI_ContinuesLoop() {
 			c.handle(ctx)
 		}()
 
-		// Send an 0200 message (unknown MTI to our handler).
+		// Build and send an unknown (but format-valid) MTI.
 		unknownMsg := iso8583.NewMessage(iso.DiscoverSpec)
-		unknownMsg.MTI("0200")
+		unknownMsg.MTI("9999")
 		packed, err := unknownMsg.Pack()
 		s.Require().NoError(err)
 
@@ -356,14 +356,79 @@ func (s *testSuiteConn) TestReadLoop_UnknownMTI_ContinuesLoop() {
 		_, err = client.Write(packed)
 		s.Require().NoError(err)
 
-		// Server should NOT close — give it a moment then cancel context.
-		time.Sleep(50 * time.Millisecond)
+		// MOD-72: server MUST now send back 0810 F39=12 on the wire.
+		respHeader := iso.NewNetworkHeader()
+		_, err = respHeader.ReadFrom(client)
+		s.Require().NoError(err, "expected 0810 F39=12 response for unknown MTI")
+
+		respBuf := make([]byte, respHeader.Length())
+		_, err = io.ReadFull(client, respBuf)
+		s.Require().NoError(err)
+
+		respMsg := iso8583.NewMessage(iso.DiscoverSpec)
+		s.Require().NoError(respMsg.Unpack(respBuf))
+
+		mti, err := respMsg.GetMTI()
+		s.Require().NoError(err)
+		s.Assert().Equal("0810", mti, "response MTI must be 0810")
+
+		var resp iso.EchoResponse
+		s.Require().NoError(respMsg.Unmarshal(&resp))
+		s.Assert().Equal("12", resp.ResponseCode, "F39 must be 12 for unknown MTI")
+
+		// Connection must stay open after receiving the 0810 F39=12.
 		select {
 		case <-handleDone:
-			s.Fail("handle should not have exited on unknown MTI")
+			s.Fail("handle must NOT exit after unknown MTI — connection should stay open")
 		default:
 			// correct — still running
 		}
+
+		cancel()
+		client.Close()
+		<-handleDone
+	})
+}
+
+func (s *testSuiteConn) TestReadLoop_NonNumericMTI_Sends0810F39_12() {
+	s.Run("when client sends non-numeric MTI then server sends 0810 F39=12 and connection stays open", func() {
+		c, client := testConn(testConnOpts())
+
+		ctx, cancel := context.WithCancel(context.Background())
+		handleDone := make(chan struct{})
+		go func() {
+			defer close(handleDone)
+			c.handle(ctx)
+		}()
+
+		// Build and send an ABCD (non-numeric) MTI message.
+		badMsg := iso8583.NewMessage(iso.DiscoverSpec)
+		badMsg.MTI("ABCD")
+		packed, err := badMsg.Pack()
+		s.Require().NoError(err)
+
+		header := iso.NewNetworkHeader()
+		s.Require().NoError(header.SetLength(len(packed)))
+		_, err = header.WriteTo(client)
+		s.Require().NoError(err)
+		_, err = client.Write(packed)
+		s.Require().NoError(err)
+
+		// Read 0810 F39=12 response.
+		respHeader := iso.NewNetworkHeader()
+		_, err = respHeader.ReadFrom(client)
+		s.Require().NoError(err)
+
+		respBuf := make([]byte, respHeader.Length())
+		_, err = io.ReadFull(client, respBuf)
+		s.Require().NoError(err)
+
+		respMsg := iso8583.NewMessage(iso.DiscoverSpec)
+		s.Require().NoError(respMsg.Unpack(respBuf))
+
+		var resp iso.EchoResponse
+		s.Require().NoError(respMsg.Unmarshal(&resp))
+		s.Assert().Equal("12", resp.ResponseCode)
 
 		cancel()
 		client.Close()

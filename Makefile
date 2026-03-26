@@ -10,6 +10,9 @@ build-gateway:
 build-simulator:
 	go build -o bin/simulator ./cmd/simulator
 
+# Alias matching the doc requirement: make simulator
+simulator: build-simulator
+
 # ── Test ──────────────────────────────────────────────────────────────────────
 test:
 	go test ./...
