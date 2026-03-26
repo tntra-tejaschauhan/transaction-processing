@@ -1,3 +1,5 @@
+//go:build e2e
+
 package gateway
 
 import (
@@ -8,8 +10,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
+
+	"github.com/moov-io/iso8583"
+	"github.com/PayWithSpireInc/transaction-processing/internal/gateway/iso"
 )
 
 // TestE2E runs the end-to-end test suite against a running gateway.
@@ -227,4 +233,95 @@ func (s *testSuiteE2E) TestResponseCodeAlwaysApproved() {
 			client.Close()
 		}
 	})
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// MOD-73: Field Parsing E2E Tests
+// ────────────────────────────────────────────────────────────────────────────
+
+func (s *testSuiteE2E) TestFieldParsing_Auth0100() {
+	s.Run("successfully send 0100 auth and receive 0110 approval", func() {
+		client, err := New(s.gatewayAddr)
+		require.NoError(s.T(), err, "failed to connect to gateway")
+		defer client.Close()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		req := &iso.AuthRequest{
+			PAN:        "4111111111111111",
+			Amount:     "000000010000",
+			TerminalID: "TERM0001",
+			STAN:       "123456",
+			RRN:        "123456789012",
+		}
+
+		resp, err := client.SendAuth(ctx, req)
+		require.NoError(s.T(), err, "SendAuth failed")
+		require.NotNil(s.T(), resp, "response should not be nil")
+
+		require.Equal(s.T(), "123456", resp.STAN, "STAN must match")
+		require.Equal(s.T(), "123456789012", resp.RRN, "RRN must match")
+		require.Equal(s.T(), "00", resp.ResponseCode, "ResponseCode should be 00")
+	})
+}
+
+func (s *testSuiteE2E) TestFieldParsing_SecondaryBitmap() {
+	s.Run("send 0100 with F90 set and verify gateway can process it without error", func() {
+		client, err := New(s.gatewayAddr)
+		require.NoError(s.T(), err, "failed to connect to gateway")
+		defer client.Close()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		// F90 sits in the secondary bitmap. Since AuthRequest doesn't have it explicitly,
+		// we'll use a local struct that embeds AuthRequest and adds F90 to simulate
+		// a rich client sending a secondary bitmap message.
+		type authRequestWithF90 struct {
+			iso.AuthRequest
+			OriginalData string `iso8583:"90"`
+		}
+
+		req := &authRequestWithF90{
+			AuthRequest: iso.AuthRequest{
+				PAN:  "4111111111111111",
+				STAN: "999999",
+				RRN:  "999999999999",
+			},
+			OriginalData: "0100" + "999999999999" + "0326143000" + "12345678901" + "00000",
+		}
+
+		// Use SendAuth-like logic manually, since SendAuth takes *iso.AuthRequest.
+		// Create and marshal.
+		msg := iso8583.NewMessage(iso.DiscoverSpec)
+		err = msg.Marshal(req)
+		require.NoError(s.T(), err)
+		msg.MTI("0100")
+
+		body, err := msg.Pack()
+		require.NoError(s.T(), err)
+
+		err = client.writeFrame(body)
+		require.NoError(s.T(), err)
+
+		respBody, err := client.readFrameWithContext(ctx)
+		require.NoError(s.T(), err)
+
+		respMsg := iso8583.NewMessage(iso.DiscoverSpec)
+		err = respMsg.Unpack(respBody)
+		require.NoError(s.T(), err, "Unpack should handle secondary bitmap fields without error")
+
+		mti, _ := respMsg.GetMTI()
+		require.Equal(s.T(), "0110", mti)
+	})
+}
+
+// TestFieldParsing_PANNotInLogs is implemented as a unit assertion on the
+// MaskPAN output to verify the PCI requirement that PAN does not leak.
+func TestFieldParsing_PANNotInLogs(t *testing.T) {
+	pan := "4111111111111111"
+	masked := iso.MaskPAN(pan)
+	assert.NotContains(t, masked, pan, "masked PAN must not contain literal PAN")
+	assert.Equal(t, "411111******1111", masked)
 }

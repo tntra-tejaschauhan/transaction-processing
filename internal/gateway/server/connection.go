@@ -134,7 +134,9 @@ func (c *Conn) processFrame() (skip bool, err error) {
 	}
 
 	// Dispatch to handler — returns the response message.
-	outMsg, err := iso.HandleMessage(inMsg)
+	// The logger is passed so 0100 auth requests can emit a masked-PAN debug log
+	// (PCI requirement). The handler never logs plaintext PAN.
+	outMsg, err := iso.HandleMessage(inMsg, c.logger)
 	if err != nil {
 		// Unknown MTI — log and signal caller to continue reading.
 		c.logger.Warn().Err(err).Msg("handle message error")

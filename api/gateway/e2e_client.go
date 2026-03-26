@@ -96,6 +96,63 @@ func (c *Client) SendEcho(ctx context.Context, stan, networkMgmtCode string) (*i
 	return &resp, nil
 }
 
+// SendAuth sends an ISO 8583 0100 Authorization Request and reads the 0110
+// Authorization Response.
+//
+// The method marshals the AuthRequest into ISO 8583 format, frames it with a
+// 2-byte big-endian length prefix, sends it over TCP, and reads the response
+// frame. The response is unmarshalled into an AuthResponse struct.
+//
+// Context cancellation will interrupt the send/receive operation.
+func (c *Client) SendAuth(ctx context.Context, req *iso.AuthRequest) (*iso.AuthResponse, error) {
+	// Create an ISO 8583 message and marshal the request into it.
+	msg := iso8583.NewMessage(iso.DiscoverSpec)
+	if err := msg.Marshal(req); err != nil {
+		return nil, fmt.Errorf("SendAuth: marshal request: %w", err)
+	}
+	msg.MTI("0100")
+
+	// Pack the message into bytes.
+	body, err := msg.Pack()
+	if err != nil {
+		return nil, fmt.Errorf("SendAuth: pack message: %w", err)
+	}
+
+	// Send the framed request to the gateway.
+	if err := c.writeFrame(body); err != nil {
+		return nil, fmt.Errorf("SendAuth: send frame: %w", err)
+	}
+
+	// Read the response frame with context timeout.
+	respBody, err := c.readFrameWithContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("SendAuth: read response: %w", err)
+	}
+
+	// Unpack the response message.
+	respMsg := iso8583.NewMessage(iso.DiscoverSpec)
+	if err := respMsg.Unpack(respBody); err != nil {
+		return nil, fmt.Errorf("SendAuth: unpack response: %w", err)
+	}
+
+	// Verify the MTI is 0110.
+	mti, err := respMsg.GetMTI()
+	if err != nil {
+		return nil, fmt.Errorf("SendAuth: get response MTI: %w", err)
+	}
+	if mti != "0110" {
+		return nil, fmt.Errorf("SendAuth: unexpected MTI in response: got %s, want 0110", mti)
+	}
+
+	// Unmarshal the response fields into an AuthResponse struct.
+	var resp iso.AuthResponse
+	if err := respMsg.Unmarshal(&resp); err != nil {
+		return nil, fmt.Errorf("SendAuth: extract response fields: %w", err)
+	}
+
+	return &resp, nil
+}
+
 // Close gracefully closes the underlying TCP connection.
 func (c *Client) Close() error {
 	if c.conn != nil {
