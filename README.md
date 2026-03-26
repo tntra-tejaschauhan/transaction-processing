@@ -154,3 +154,5 @@ If **BuyPassListener** (the legacy .NET service) is running on the same machine,
 ## Testability
 
 A new team member must be able to **run all tests within 30 minutes** from clone. The Golden Path plus `go test ./...` and `go test -tags=integration ./...` (with `docker-compose up -d`) is designed to meet this "Clone to Test" goal.
+
+
