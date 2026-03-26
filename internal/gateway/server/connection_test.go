@@ -33,6 +33,7 @@ func testConnOpts() *ServerOptions {
 		WriteTimeout:    2 * time.Second,
 		MaxConnections:  10,
 		ShutdownTimeout: 2 * time.Second,
+		BufSize:         8192,
 	}
 }
 
@@ -204,27 +205,58 @@ func (s *testSuiteConn) TestReadLoop_ContextCancelExitsCleanly() {
 	})
 }
 
-func (s *testSuiteConn) TestReadLoop_ZeroLengthFrameReturnsError() {
-	s.Run("when client sends a zero-length frame then handle exits with error", func() {
+func (s *testSuiteConn) TestReadLoop_ZeroLengthFrame_RespondsWithF39_30() {
+	s.Run("when client sends zero-length frame then server responds with 0810 F39=30 and stays open", func() {
 		c, client := testConn(testConnOpts())
 
+		ctx, cancel := context.WithCancel(context.Background())
 		handleDone := make(chan struct{})
 		go func() {
 			defer close(handleDone)
-			c.handle(context.Background())
+			c.handle(ctx)
 		}()
 
-		// Send a zero-length frame.
+		// Send a zero-length frame: 2-byte header {0x00, 0x00}.
 		_, err := client.Write([]byte{0x00, 0x00})
 		s.Require().NoError(err)
-		client.Close()
 
-		select {
-		case <-handleDone:
-			// handle detected zero-length frame and exited
-		case <-time.After(2 * time.Second):
-			s.Fail("handle did not exit after zero-length frame")
-		}
+		// Server must respond with 0810 F39=30 — connection must stay open.
+		respBody, err := readFrame(client)
+		s.Require().NoError(err, "expected 0810 F39=30 response, got read error")
+
+		respMsg := iso8583.NewMessage(iso.DiscoverSpec)
+		s.Require().NoError(respMsg.Unpack(respBody))
+		mti, err := respMsg.GetMTI()
+		s.Require().NoError(err)
+		s.Assert().Equal("0810", mti)
+		code, err := respMsg.GetString(39)
+		s.Require().NoError(err)
+		s.Assert().Equal("30", code, "F39 must be 30 for zero-length frame")
+
+		// Verify connection is still open: send a valid 0800 and get a real 0810 back.
+		req := iso.EchoRequest{STAN: "654321", NetworkMgmtInfoCode: "301"}
+		msg := iso8583.NewMessage(iso.DiscoverSpec)
+		s.Require().NoError(msg.Marshal(&req))
+		msg.MTI("0800")
+		packed, err := msg.Pack()
+		s.Require().NoError(err)
+		header := iso.NewNetworkHeader()
+		s.Require().NoError(header.SetLength(len(packed)))
+		_, err = header.WriteTo(client)
+		s.Require().NoError(err)
+		_, err = client.Write(packed)
+		s.Require().NoError(err)
+
+		respBody2, err := readFrame(client)
+		s.Require().NoError(err, "connection should still be open after zero-length rejection")
+		respMsg2 := iso8583.NewMessage(iso.DiscoverSpec)
+		s.Require().NoError(respMsg2.Unpack(respBody2))
+		mti2, _ := respMsg2.GetMTI()
+		s.Assert().Equal("0810", mti2)
+
+		cancel()
+		client.Close()
+		<-handleDone
 	})
 }
 
@@ -370,3 +402,149 @@ func (s *testSuiteConn) TestReadLoop_UnknownMTI_ContinuesLoop() {
 		<-handleDone
 	})
 }
+
+// ── MOD-70: Frame validation ───────────────────────────────────────────────────
+
+func (s *testSuiteConn) TestReadLoop_OversizedFrame_RespondsWithF39_30() {
+	s.Run("when client sends frame >4096 bytes then server responds with 0810 F39=30 and stays open", func() {
+		c, client := testConn(testConnOpts())
+
+		ctx, cancel := context.WithCancel(context.Background())
+		handleDone := make(chan struct{})
+		go func() {
+			defer close(handleDone)
+			c.handle(ctx)
+		}()
+
+		// Send a length-prefix indicating 5000 bytes (>MaxFrameSize=4096).
+		// We only send the 2-byte header; the server validates length before reading body.
+		oversizeHeader := make([]byte, 2)
+		oversizeHeader[0] = 0x13 // 0x1388 = 5000
+		oversizeHeader[1] = 0x88
+		_, err := client.Write(oversizeHeader)
+		s.Require().NoError(err)
+
+		// Server must respond with 0810 F39=30 and keep connection open.
+		respBody, err := readFrame(client)
+		s.Require().NoError(err, "expected 0810 F39=30 response for oversized frame")
+
+		respMsg := iso8583.NewMessage(iso.DiscoverSpec)
+		s.Require().NoError(respMsg.Unpack(respBody))
+		mti, err := respMsg.GetMTI()
+		s.Require().NoError(err)
+		s.Assert().Equal("0810", mti)
+		code, err := respMsg.GetString(39)
+		s.Require().NoError(err)
+		s.Assert().Equal("30", code, "F39 must be 30 for oversized frame")
+
+		// Verify connection is still open: send a valid 0800 and get 0810 back.
+		req := iso.EchoRequest{STAN: "111222", NetworkMgmtInfoCode: "301"}
+		msg := iso8583.NewMessage(iso.DiscoverSpec)
+		s.Require().NoError(msg.Marshal(&req))
+		msg.MTI("0800")
+		validPacked, err := msg.Pack()
+		s.Require().NoError(err)
+		hdr := iso.NewNetworkHeader()
+		s.Require().NoError(hdr.SetLength(len(validPacked)))
+		_, err = hdr.WriteTo(client)
+		s.Require().NoError(err)
+		_, err = client.Write(validPacked)
+		s.Require().NoError(err)
+
+		respBody2, err := readFrame(client)
+		s.Require().NoError(err, "connection should still be open after oversized rejection")
+		respMsg2 := iso8583.NewMessage(iso.DiscoverSpec)
+		s.Require().NoError(respMsg2.Unpack(respBody2))
+		mti2, _ := respMsg2.GetMTI()
+		s.Assert().Equal("0810", mti2)
+
+		cancel()
+		client.Close()
+		<-handleDone
+	})
+}
+
+func (s *testSuiteConn) TestReadLoop_FragmentedDelivery_AssemblesCorrectly() {
+	s.Run("when message arrives in multiple TCP segments then bufio.Reader assembles it correctly", func() {
+		c, client := testConn(testConnOpts())
+
+		ctx, cancel := context.WithCancel(context.Background())
+		handleDone := make(chan struct{})
+		go func() {
+			defer close(handleDone)
+			c.handle(ctx)
+		}()
+
+		// Build a valid packed 0800 message.
+		req := iso.EchoRequest{STAN: "789012", NetworkMgmtInfoCode: "301"}
+		msg := iso8583.NewMessage(iso.DiscoverSpec)
+		s.Require().NoError(msg.Marshal(&req))
+		msg.MTI("0800")
+		packed, err := msg.Pack()
+		s.Require().NoError(err)
+
+		// Prepare the 2-byte header separately.
+		hdr := iso.NewNetworkHeader()
+		s.Require().NoError(hdr.SetLength(len(packed)))
+
+		// Write header and body as separate Write() calls to simulate fragmentation.
+		// net.Pipe is synchronous, so use a goroutine to avoid deadlock.
+		writeDone := make(chan error, 1)
+		go func() {
+			if _, werr := hdr.WriteTo(client); werr != nil {
+				writeDone <- werr
+				return
+			}
+			// Small delay to ensure header is dispatched as its own segment.
+			time.Sleep(10 * time.Millisecond)
+			_, werr := client.Write(packed)
+			writeDone <- werr
+		}()
+
+		// Read the assembled 0810 response.
+		respBody, err := readFrame(client)
+		s.Require().NoError(err, "fragmented message should be assembled and echoed")
+		s.Require().NoError(<-writeDone, "fragmented write should succeed")
+
+		respMsg := iso8583.NewMessage(iso.DiscoverSpec)
+		s.Require().NoError(respMsg.Unpack(respBody))
+		mti, err := respMsg.GetMTI()
+		s.Require().NoError(err)
+		s.Assert().Equal("0810", mti)
+
+		var resp iso.EchoResponse
+		s.Require().NoError(respMsg.Unmarshal(&resp))
+		s.Assert().Equal("789012", resp.STAN)
+		s.Assert().Equal("00", resp.ResponseCode)
+
+		cancel()
+		client.Close()
+		<-handleDone
+	})
+}
+
+func (s *testSuiteConn) TestSendErrorResponse_WritesValidF39_30() {
+	s.Run("when sendErrorResponse is called then a valid 0810 F39=30 is written on the connection", func() {
+		c, client := testConn(testConnOpts())
+		defer client.Close()
+
+		done := make(chan error, 1)
+		go func() {
+			done <- c.sendErrorResponse("30")
+		}()
+
+		respBody, err := readFrame(client)
+		s.Require().NoError(err)
+		s.Require().NoError(<-done)
+
+		respMsg := iso8583.NewMessage(iso.DiscoverSpec)
+		s.Require().NoError(respMsg.Unpack(respBody))
+		mti, err := respMsg.GetMTI()
+		s.Require().NoError(err)
+		s.Assert().Equal("0810", mti)
+		code, err := respMsg.GetString(39)
+		s.Require().NoError(err)
+		s.Assert().Equal("30", code)
+	})
+}
+

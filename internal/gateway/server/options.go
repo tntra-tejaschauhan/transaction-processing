@@ -26,6 +26,10 @@ type ServerOptions struct {
 	// ShutdownTimeout is how long Stop() waits for active connections to
 	// drain before forcing close.
 	ShutdownTimeout time.Duration
+
+	// BufSize is the size of the bufio.Reader buffer used for each connection.
+	// Configurable via GATEWAY_BUF_SIZE env var. Default: 8192 bytes.
+	BufSize int
 }
 
 // NewServerOptions loads gateway config from the YAML file at configPath,
@@ -45,6 +49,7 @@ func NewServerOptions(configPath string) (*ServerOptions, error) {
 		WriteTimeout:    time.Duration(cfg.WriteTimeoutMs) * time.Millisecond,
 		MaxConnections:  cfg.MaxConnections,
 		ShutdownTimeout: time.Duration(cfg.ShutdownTimeoutMs) * time.Millisecond,
+		BufSize:         cfg.BufSize,
 	}
 
 	if err := opts.validate(); err != nil {
@@ -70,6 +75,9 @@ func (o *ServerOptions) validate() error {
 	}
 	if o.ShutdownTimeout <= 0 {
 		return fmt.Errorf("shutdown_timeout_ms must be positive, got %d ms", o.ShutdownTimeout.Milliseconds())
+	}
+	if o.BufSize <= 0 {
+		return fmt.Errorf("buf_size must be positive, got %d", o.BufSize)
 	}
 	return nil
 }

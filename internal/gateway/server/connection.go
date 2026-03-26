@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -13,6 +14,10 @@ import (
 	"github.com/rs/zerolog"
 )
 
+// MaxFrameSize is the maximum allowed ISO 8583 message body length in bytes.
+// Frames larger than this are rejected with 0810 F39=30 without closing the connection.
+const MaxFrameSize = 4096
+
 // Conn handles the lifecycle of a single accepted TCP connection.
 // It owns the read loop, write path, deadline management, and clean teardown.
 //
@@ -23,15 +28,18 @@ import (
 //   - Goroutine exit: readLoop returns on io.EOF, net error, or ctx cancel.
 type Conn struct {
 	conn   net.Conn
+	reader *bufio.Reader
 	opts   *ServerOptions
 	logger zerolog.Logger
 }
 
 // newConn constructs a Conn for a single accepted TCP connection.
 // The logger is enriched with remote_addr so every log line is traceable.
+// The bufio.Reader wraps conn to handle TCP segment fragmentation transparently.
 func newConn(c net.Conn, opts *ServerOptions, logger zerolog.Logger) *Conn {
 	return &Conn{
 		conn:   c,
+		reader: bufio.NewReaderSize(c, opts.BufSize),
 		opts:   opts,
 		logger: logger.With().Str("remote_addr", c.RemoteAddr().String()).Logger(),
 	}
@@ -63,13 +71,6 @@ func (c *Conn) handle(ctx context.Context) {
 // readLoop reads ISO 8583 frames until the connection closes or ctx is cancelled.
 //
 // Frame format: 2-byte big-endian length prefix + ISO 8583 message body.
-// Each frame is unpacked via moov-io/iso8583, dispatched to iso.HandleMessage,
-// and the response is packed and written back with the same framing.
-//
-// Exit condition: returns nil on ctx cancel, non-nil error on read/write failure.
-// readLoop reads ISO 8583 frames until the connection closes or ctx is cancelled.
-//
-// Frame format: 2-byte big-endian length prefix + ISO 8583 message body.
 // Each frame is handed to processFrame. Returns nil on ctx cancel, non-nil on error.
 func (c *Conn) readLoop(ctx context.Context) error {
 	for {
@@ -95,8 +96,8 @@ func (c *Conn) readLoop(ctx context.Context) error {
 
 // processFrame performs the full read→unpack→dispatch→write cycle for a
 // single ISO 8583 frame. It returns (true, nil) when the frame was handled
-// but the caller should continue reading (e.g. unknown MTI), or (false, err)
-// when a fatal I/O or parsing error occurred.
+// but the caller should continue reading (e.g. zero-length or oversized frame
+// responded with 0810 F39=30), or (false, err) when a fatal I/O error occurred.
 func (c *Conn) processFrame() (skip bool, err error) {
 	// HARD RULE (§4.6): explicit read deadline before every blocking read.
 	if err := c.conn.SetReadDeadline(time.Now().Add(c.opts.ReadTimeout)); err != nil {
@@ -104,14 +105,30 @@ func (c *Conn) processFrame() (skip bool, err error) {
 	}
 
 	// Read the 2-byte big-endian length prefix using moov-io framer.
+	// c.reader (bufio.Reader) handles TCP segment fragmentation transparently.
 	header := iso.NewNetworkHeader()
-	if _, err := header.ReadFrom(c.conn); err != nil {
+	if _, err := header.ReadFrom(c.reader); err != nil {
 		return false, fmt.Errorf("read length prefix: %w", err)
 	}
 
 	msgLen := header.Length()
+
+	// Reject zero-length frames — respond with 0810 F39=30, keep connection open.
 	if msgLen == 0 {
-		return false, fmt.Errorf("read length prefix: zero-length frame received")
+		c.logger.Warn().Msg("zero-length frame rejected")
+		if sendErr := c.sendErrorResponse("30"); sendErr != nil {
+			return false, fmt.Errorf("send error response for zero-length frame: %w", sendErr)
+		}
+		return true, nil
+	}
+
+	// Reject oversized frames — respond with 0810 F39=30, keep connection open.
+	if msgLen > MaxFrameSize {
+		c.logger.Warn().Int("msg_len", int(msgLen)).Int("max", MaxFrameSize).Msg("oversized frame rejected")
+		if sendErr := c.sendErrorResponse("30"); sendErr != nil {
+			return false, fmt.Errorf("send error response for oversized frame: %w", sendErr)
+		}
+		return true, nil
 	}
 
 	// Set a fresh read deadline for the body read.
@@ -119,9 +136,9 @@ func (c *Conn) processFrame() (skip bool, err error) {
 		return false, fmt.Errorf("set read deadline for body: %w", err)
 	}
 
-	// Read the full message body.
+	// Read the full message body via bufio.Reader (handles fragmentation).
 	msgBuf := make([]byte, msgLen)
-	if _, err := io.ReadFull(c.conn, msgBuf); err != nil {
+	if _, err := io.ReadFull(c.reader, msgBuf); err != nil {
 		return false, fmt.Errorf("read message body (%d bytes): %w", msgLen, err)
 	}
 
@@ -153,6 +170,23 @@ func (c *Conn) processFrame() (skip bool, err error) {
 	}
 
 	return false, nil
+}
+
+// sendErrorResponse builds a minimal 0810 response with the given responseCode
+// in F39 and writes it back to the client. Used for frame-level rejections
+// (zero-length, oversized) where no request context is available.
+// The connection remains open after this call.
+func (c *Conn) sendErrorResponse(responseCode string) error {
+	errMsg := iso8583.NewMessage(iso.DiscoverSpec)
+	errMsg.MTI("0810") //nolint:errcheck // MTI "0810" is a compile-time constant and cannot fail
+	if err := errMsg.Field(39, responseCode); err != nil {
+		return fmt.Errorf("set F39 on error response: %w", err)
+	}
+	responseBytes, err := errMsg.Pack()
+	if err != nil {
+		return fmt.Errorf("pack error response: %w", err)
+	}
+	return c.write(responseBytes)
 }
 
 // write sends data to the client using the moov-io 2-byte network header.

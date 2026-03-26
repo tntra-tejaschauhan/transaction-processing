@@ -3,3 +3,4 @@ read_timeout_ms: 30000
 write_timeout_ms: 30000
 max_connections: 10000
 shutdown_timeout_ms: 5000
+buf_size: 8192
