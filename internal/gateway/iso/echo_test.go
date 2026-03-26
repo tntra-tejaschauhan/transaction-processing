@@ -101,3 +101,49 @@ func TestHandleMessage_UnknownMTI(t *testing.T) {
 	_, err := iso.HandleMessage(msg)
 	assert.Error(t, err, "unsupported MTI must return an error, not panic")
 }
+
+// TestBuildEcho0810_SignOnVariant verifies that a sign-on request (F70=001)
+// produces a valid 0810 response with ResponseCode 00 and F70 echoed back.
+func TestBuildEcho0810_SignOnVariant(t *testing.T) {
+	req := &iso.EchoRequest{
+		STAN:                "100001",
+		NetworkMgmtInfoCode: "001",
+	}
+
+	msg, err := iso.BuildEcho0810(req)
+	require.NoError(t, err)
+	require.NotNil(t, msg)
+
+	mti, err := msg.GetMTI()
+	require.NoError(t, err)
+	assert.Equal(t, "0810", mti, "response MTI must be 0810 for sign-on")
+
+	var resp iso.EchoResponse
+	require.NoError(t, msg.Unmarshal(&resp))
+	assert.Equal(t, "100001", resp.STAN, "F11 STAN must match request")
+	assert.Equal(t, "00", resp.ResponseCode, "F39 ResponseCode must be '00' (approved)")
+	assert.Equal(t, "001", resp.NetworkMgmtInfoCode, "F70 must echo '001' back for sign-on")
+}
+
+// TestBuildEcho0810_EchoVariant verifies that a standard echo request (F70=301)
+// produces a valid 0810 response with ResponseCode 00 and F70 echoed back.
+func TestBuildEcho0810_EchoVariant(t *testing.T) {
+	req := &iso.EchoRequest{
+		STAN:                "300301",
+		NetworkMgmtInfoCode: "301",
+	}
+
+	msg, err := iso.BuildEcho0810(req)
+	require.NoError(t, err)
+	require.NotNil(t, msg)
+
+	mti, err := msg.GetMTI()
+	require.NoError(t, err)
+	assert.Equal(t, "0810", mti, "response MTI must be 0810 for echo")
+
+	var resp iso.EchoResponse
+	require.NoError(t, msg.Unmarshal(&resp))
+	assert.Equal(t, "300301", resp.STAN, "F11 STAN must match request")
+	assert.Equal(t, "00", resp.ResponseCode, "F39 ResponseCode must be '00' (approved)")
+	assert.Equal(t, "301", resp.NetworkMgmtInfoCode, "F70 must echo '301' back for echo")
+}

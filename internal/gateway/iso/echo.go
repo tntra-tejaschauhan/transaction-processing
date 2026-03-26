@@ -9,7 +9,11 @@ import (
 // BuildEcho0810 constructs an ISO 8583 0810 Network Management Response
 // message from the values in the incoming 0800 EchoRequest.
 //
-// The response:
+// It handles both network management variants:
+//   - F70=001 (Sign-on): sent by acquirers to initiate a session with the network.
+//   - F70=301 (Echo):    a keep-alive / connectivity check.
+//
+// In both cases the response behaviour is identical:
 //   - Sets MTI to "0810"
 //   - Echoes F11 (STAN) unchanged from the request
 //   - Sets F39 (ResponseCode) to "00" (approved)
