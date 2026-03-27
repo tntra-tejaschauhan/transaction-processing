@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"time"
 
 	"github.com/PayWithSpireInc/transaction-processing/internal/gateway/iso"
@@ -50,6 +51,8 @@ func (c *Conn) handle(ctx context.Context) {
 	if err := c.readLoop(ctx); err != nil {
 		if isGracefulClose(err) {
 			c.logger.Info().Msg("connection closed by client")
+		} else if os.IsTimeout(err) {
+			c.logger.Info().Msg("connection idle timeout")
 		} else {
 			// Log once at boundary — do not re-log up the stack (§4.4).
 			c.logger.Warn().Err(err).Msg("connection error")
@@ -99,8 +102,9 @@ func (c *Conn) readLoop(ctx context.Context) error {
 // when a fatal I/O or parsing error occurred.
 func (c *Conn) processFrame() (skip bool, err error) {
 	// HARD RULE (§4.6): explicit read deadline before every blocking read.
-	if err := c.conn.SetReadDeadline(time.Now().Add(c.opts.ReadTimeout)); err != nil {
-		return false, fmt.Errorf("set read deadline: %w", err)
+	// Use IdleTimeout to bound the wait for a NEW frame header to arrive. 
+	if err := c.conn.SetReadDeadline(time.Now().Add(c.opts.IdleTimeout)); err != nil {
+		return false, fmt.Errorf("set idle read deadline: %w", err)
 	}
 
 	// Read the 2-byte big-endian length prefix using moov-io framer.

@@ -26,6 +26,11 @@ type ServerOptions struct {
 	// ShutdownTimeout is how long Stop() waits for active connections to
 	// drain before forcing close.
 	ShutdownTimeout time.Duration
+
+	// IdleTimeout is the maximum time to wait for a connected client to 
+	// commence a new request (i.e. to send the 2-byte header). If no request 
+	// is initiated within this window, the server closes the connection.
+	IdleTimeout time.Duration
 }
 
 // NewServerOptions loads gateway config from the YAML file at configPath,
@@ -45,6 +50,7 @@ func NewServerOptions(configPath string) (*ServerOptions, error) {
 		WriteTimeout:    time.Duration(cfg.WriteTimeoutMs) * time.Millisecond,
 		MaxConnections:  cfg.MaxConnections,
 		ShutdownTimeout: time.Duration(cfg.ShutdownTimeoutMs) * time.Millisecond,
+		IdleTimeout:     time.Duration(cfg.IdleTimeoutMs) * time.Millisecond,
 	}
 
 	if err := opts.validate(); err != nil {
@@ -70,6 +76,9 @@ func (o *ServerOptions) validate() error {
 	}
 	if o.ShutdownTimeout <= 0 {
 		return fmt.Errorf("shutdown_timeout_ms must be positive, got %d ms", o.ShutdownTimeout.Milliseconds())
+	}
+	if o.IdleTimeout <= o.ReadTimeout {
+		return fmt.Errorf("idle_timeout_ms (%d) must be greater than read_timeout_ms (%d) to ensure consistent timeout enforcement", o.IdleTimeout.Milliseconds(), o.ReadTimeout.Milliseconds())
 	}
 	return nil
 }
