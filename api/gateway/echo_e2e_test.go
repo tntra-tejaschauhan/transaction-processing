@@ -1,3 +1,5 @@
+//go:build e2e
+
 package gateway
 
 import (
@@ -227,4 +229,61 @@ func (s *testSuiteE2E) TestResponseCodeAlwaysApproved() {
 			client.Close()
 		}
 	})
+}
+
+// TestRouting_0800 verifies end-to-end routing for Network Management (Echo) messages.
+func TestRouting_0800(t *testing.T) {
+	client, err := New("localhost:8583")
+	require.NoError(t, err)
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	resp, err := client.SendByMTI(ctx, "0800", "0810", "100001")
+	require.NoError(t, err)
+	require.Equal(t, "00", resp.ResponseCode)
+}
+// TestRouting_0100 verifies end-to-end routing for Authorization Request messages.
+func TestRouting_0100(t *testing.T) {
+	client, err := New("localhost:8583")
+	require.NoError(t, err)
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	resp, err := client.SendByMTI(ctx, "0100", "0110", "100002")
+	require.NoError(t, err)
+	require.Equal(t, "00", resp.ResponseCode)
+}
+// TestRouting_0120 verifies end-to-end routing for Post-Authorization messages.
+func TestRouting_0120(t *testing.T) {
+	client, err := New("localhost:8583")
+	require.NoError(t, err)
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	resp, err := client.SendByMTI(ctx, "0120", "0130", "100003")
+	require.NoError(t, err)
+	require.Equal(t, "00", resp.ResponseCode)
+}
+// TestRouting_0400 verifies end-to-end routing for Reversal Request messages.
+func TestRouting_0400(t *testing.T) {
+	client, err := New("localhost:8583")
+	require.NoError(t, err)
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	resp, err := client.SendByMTI(ctx, "0400", "0410", "100004")
+	require.NoError(t, err)
+	require.Equal(t, "00", resp.ResponseCode)
+}
+// TestRouting_Unknown0300 verifies that an unsupported MTI correctly returns
+// an 0810 response with F39=12 (Invalid Transaction) over the wire.
+func TestRouting_Unknown0300(t *testing.T) {
+	client, err := New("localhost:8583")
+	require.NoError(t, err)
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	resp, err := client.SendByMTI(ctx, "0300", "0810", "100005")
+	require.NoError(t, err)
+	require.Equal(t, "12", resp.ResponseCode)
 }

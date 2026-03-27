@@ -19,6 +19,12 @@ type Client struct {
 	conn net.Conn
 }
 
+// add this type near existing types
+type GenericResponse struct {
+	STAN         string `iso8583:"11"`
+	ResponseCode string `iso8583:"39"`
+}
+
 // New dials the gateway at addr and returns a Client ready to send messages.
 // If the connection fails or times out, an error is returned.
 //
@@ -154,4 +160,43 @@ func (c *Client) readFrameWithContext(ctx context.Context) ([]byte, error) {
 	}
 
 	return c.readFrame()
+}
+
+// add this new method
+func (c *Client) SendByMTI(ctx context.Context, reqMTI, expectedRespMTI, stan string) (*GenericResponse, error) {
+	req := struct {
+		STAN string `iso8583:"11"`
+	}{STAN: stan}
+	msg := iso8583.NewMessage(iso.DiscoverSpec)
+	if err := msg.Marshal(&req); err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
+	msg.MTI(reqMTI)
+	body, err := msg.Pack()
+	if err != nil {
+		return nil, fmt.Errorf("pack message: %w", err)
+	}
+	if err := c.writeFrame(body); err != nil {
+		return nil, fmt.Errorf("send frame: %w", err)
+	}
+	respBody, err := c.readFrameWithContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+	respMsg := iso8583.NewMessage(iso.DiscoverSpec)
+	if err := respMsg.Unpack(respBody); err != nil {
+		return nil, fmt.Errorf("unpack response: %w", err)
+	}
+	mti, err := respMsg.GetMTI()
+	if err != nil {
+		return nil, fmt.Errorf("get response MTI: %w", err)
+	}
+	if mti != expectedRespMTI {
+		return nil, fmt.Errorf("unexpected MTI in response: got %s, want %s", mti, expectedRespMTI)
+	}
+	var resp GenericResponse
+	if err := respMsg.Unmarshal(&resp); err != nil {
+		return nil, fmt.Errorf("extract response fields: %w", err)
+	}
+	return &resp, nil
 }
