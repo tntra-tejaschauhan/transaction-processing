@@ -694,7 +694,7 @@ func TestFieldParsing_PANNotInLogs(t *testing.T) {
 
 // ────────────────────────────────────────────────────────────────────────────	
 // MOD-74: MTI message routing
-// 
+// ────────────────────────────────────────────────────────────────────────────	
 
 // TestRouting_0800 verifies end-to-end routing for Network Management (Echo) messages.
 func TestRouting_0800(t *testing.T) {
@@ -756,3 +756,50 @@ func TestRouting_Unknown0300(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "12", resp.ResponseCode)
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// MOD-75: SLA: Response latency must be within 100 ms
+// ────────────────────────────────────────────────────────────────────────────
+
+func (s *testSuiteE2E) TestEcho_ResponseWithin100ms() {
+	s.Run("each echo (F70=301) round-trip must complete within 100ms", func() {
+		client, err := New(s.gatewayAddr)
+		require.NoError(s.T(), err, "failed to connect to gateway")
+		defer client.Close()
+
+		const iterations = 10
+		for i := 0; i < iterations; i++ {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			start := time.Now()
+			_, err := client.SendEcho(ctx, "301301", "301")
+			elapsed := time.Since(start)
+			cancel()
+
+			require.NoError(s.T(), err, "SendEcho iteration %d failed", i+1)
+			require.Less(s.T(), elapsed, 100*time.Millisecond,
+				"echo response exceeded 100ms SLA on iteration %d (got %s)", i+1, elapsed)
+		}
+	})
+}
+
+func (s *testSuiteE2E) TestSignOn_ResponseWithin100ms() {
+	s.Run("each sign-on (F70=001) round-trip must complete within 100ms", func() {
+		client, err := New(s.gatewayAddr)
+		require.NoError(s.T(), err, "failed to connect to gateway")
+		defer client.Close()
+
+		const iterations = 10
+		for i := 0; i < iterations; i++ {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			start := time.Now()
+			_, err := client.SendEcho(ctx, "001001", "001")
+			elapsed := time.Since(start)
+			cancel()
+
+			require.NoError(s.T(), err, "SendEcho (sign-on) iteration %d failed", i+1)
+			require.Less(s.T(), elapsed, 100*time.Millisecond,
+				"sign-on response exceeded 100ms SLA on iteration %d (got %s)", i+1, elapsed)
+		}
+	})
+}
+

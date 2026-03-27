@@ -1,4 +1,4 @@
-.PHONY: build build-gateway build-simulator test test-gateway test-gateway-race bench-gateway e2e-gateway lint
+.PHONY: build build-gateway build-simulator test test-gateway test-gateway-race bench-gateway e2e-gateway signoff-gateway lint
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 build:
@@ -31,7 +31,15 @@ e2e-gateway: build-gateway
 	@echo "Starting gateway..."
 	@GATEWAY_MAX_CONNECTIONS=5 GATEWAY_IDLE_TIMEOUT_MS=2000 GATEWAY_READ_TIMEOUT_MS=1000 ./bin/gateway &
 	@sleep 1
-	go test -tags e2e -v ./api/gateway/...
+	go test -tags e2e -cover ./api/gateway/...
+	@pkill -f bin/gateway || true
+
+# ── Sign-off (Discover acceptance criteria, requires running gateway binary) ──
+signoff-gateway: build-gateway
+	@echo "Starting gateway..."
+	@./bin/gateway &
+	@sleep 1
+	go test -tags e2e -run ^TestSignOff_ -v ./api/gateway/...
 	@pkill -f bin/gateway || true
 
 # ── Lint ──────────────────────────────────────────────────────────────────────
