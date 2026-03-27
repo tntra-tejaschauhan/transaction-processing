@@ -134,12 +134,27 @@ func TestBuildEcho0810_MarshalError(t *testing.T) {
 }
 
 // TestHandleMessage_UnknownMTI ensures that an unsupported MTI returns an
-// error and does not panic.
+// 0810 response with F39=12 (invalid transaction) per MOD-74.
 func TestHandleMessage_UnknownMTI(t *testing.T) {
 	msg := iso8583.NewMessage(iso.DiscoverSpec)
+	require.NoError(t, msg.Marshal(&struct {
+		STAN string `iso8583:"11"`
+	}{STAN: "999888"}))
 	msg.MTI("0200")
 
-	_, err := iso.HandleMessage(msg, zerolog.Nop())
-	assert.Error(t, err, "unsupported MTI must return an error, not panic")
+	resp, err := iso.HandleMessage(msg)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+
+	mti, _ := resp.GetMTI()
+	assert.Equal(t, "0810", mti)
+
+	var data struct {
+		STAN string `iso8583:"11"`
+		F39  string `iso8583:"39"`
+	}
+	require.NoError(t, resp.Unmarshal(&data))
+	assert.Equal(t, "999888", data.STAN)
+	assert.Equal(t, "12", data.F39)
 }
 

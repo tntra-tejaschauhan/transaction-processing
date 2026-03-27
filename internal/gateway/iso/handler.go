@@ -7,6 +7,8 @@ import (
 	"github.com/rs/zerolog"
 )
 
+var defaultRegistry = NewHandlerRegistry()
+
 // HandleMessage receives a parsed, unpacked ISO 8583 message and returns an
 // appropriate response message.
 //
@@ -28,28 +30,7 @@ func HandleMessage(msg *iso8583.Message, logger zerolog.Logger) (*iso8583.Messag
 		return nil, fmt.Errorf("HandleMessage: get MTI: %w", err)
 	}
 
-	// MTI format gate: must be exactly 4 ASCII decimal digits.
-	if !validateMTI(mti) {
-		resp, err := buildErrorResponse(msg, "12")
-		if err != nil {
-			return nil, fmt.Errorf("HandleMessage: build error response for invalid MTI %q: %w", mti, err)
-		}
-		return resp, nil
-	}
-
-	switch mti {
-	case "0800":
-		return handleEchoRequest(msg)
-	case "0100":
-		return handleAuthRequest(msg, logger)
-	default:
-		// Recognised format but unsupported MTI — send 0810 F39=12.
-		resp, err := buildErrorResponse(msg, "12")
-		if err != nil {
-			return nil, fmt.Errorf("HandleMessage: build error response for unsupported MTI %q: %w", mti, err)
-		}
-		return resp, nil
-	}
+	return defaultRegistry.Dispatch(mti, msg)
 }
 
 

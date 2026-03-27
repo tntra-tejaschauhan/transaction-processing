@@ -6,6 +6,17 @@ import (
 	"github.com/moov-io/iso8583"
 )
 
+// EchoHandler handles 0800 -> 0810.
+type EchoHandler struct{}
+
+func (h EchoHandler) Handle(msg *iso8583.Message) (*iso8583.Message, error) {
+	var req EchoRequest
+	if err := msg.Unmarshal(&req); err != nil {
+		return nil, fmt.Errorf("EchoHandler.Handle: unmarshal 0800: %w", err)
+	}
+	return BuildEcho0810(&req)
+}
+
 // BuildEcho0810 constructs an ISO 8583 0810 Network Management Response
 // message from the values in the incoming 0800 EchoRequest.
 //
