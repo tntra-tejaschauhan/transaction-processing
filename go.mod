@@ -10,7 +10,6 @@ require (
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/microsoft/go-mssqldb v1.9.8
 	github.com/moov-io/iso8583 v0.25.3
-	github.com/moov-io/iso8583-connection v0.9.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/rs/zerolog v1.34.0
 	github.com/samber/do v1.6.0

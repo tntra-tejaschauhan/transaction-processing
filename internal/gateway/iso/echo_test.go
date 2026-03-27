@@ -5,6 +5,7 @@ import (
 
 	"github.com/moov-io/iso8583"
 	"github.com/moov-io/iso8583/field"
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -78,7 +79,7 @@ func TestHandleMessage_Echo0800(t *testing.T) {
 	require.NoError(t, inMsg.Marshal(req))
 	inMsg.MTI("0800")
 
-	outMsg, err := iso.HandleMessage(inMsg)
+	outMsg, err := iso.HandleMessage(inMsg, zerolog.Nop())
 	require.NoError(t, err)
 	require.NotNil(t, outMsg)
 
@@ -131,3 +132,14 @@ func TestBuildEcho0810_MarshalError(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "marshal response:")
 }
+
+// TestHandleMessage_UnknownMTI ensures that an unsupported MTI returns an
+// error and does not panic.
+func TestHandleMessage_UnknownMTI(t *testing.T) {
+	msg := iso8583.NewMessage(iso.DiscoverSpec)
+	msg.MTI("0200")
+
+	_, err := iso.HandleMessage(msg, zerolog.Nop())
+	assert.Error(t, err, "unsupported MTI must return an error, not panic")
+}
+

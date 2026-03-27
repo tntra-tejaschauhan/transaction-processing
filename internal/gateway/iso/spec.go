@@ -33,9 +33,12 @@ import (
 //   - F41 : Card Acceptor Terminal ID (8 chars, fixed)
 //   - F42 : Card Acceptor ID Code / Merchant ID (15 chars, fixed)
 //   - F43 : Card Acceptor Name/Location (40 chars, fixed)
+//   - F48 : Additional Data — Private Use (LLLVAR, up to 999)
 //   - F49 : Currency Code, Transaction (3 digits, fixed)
+//   - F52 : PIN Block (8 bytes, binary)
 //   - F63 : Reserved Private (LLLVAR, up to 999)
 //   - F70 : Network Management Information Code (3 digits, fixed)
+//   - F90 : Original Data Elements (42 chars, fixed) — secondary bitmap
 //
 // A full spec is defined so that moov-io/iso8583 never fails during Unpack
 // due to an undeclared field present in the incoming message.
@@ -182,11 +185,28 @@ var DiscoverSpec = &iso8583.MessageSpec{
 			Enc:         encoding.ASCII,
 			Pref:        prefix.ASCII.Fixed,
 		}),
+		// F48 – Additional Data — Private Use (LLLVAR, up to 999 chars)
+		// Required for 0100 authorization messages (MOD-73).
+		48: field.NewString(&field.Spec{
+			Length:      999,
+			Description: "Additional Data — Private Use",
+			Enc:         encoding.ASCII,
+			Pref:        prefix.ASCII.LLL,
+		}),
 		// F49 – Currency Code, Transaction (3 digits, fixed)
 		49: field.NewString(&field.Spec{
 			Length:      3,
 			Description: "Currency Code, Transaction",
 			Enc:         encoding.ASCII,
+			Pref:        prefix.ASCII.Fixed,
+		}),
+		// F52 – PIN Block (8 bytes binary, PCI-sensitive).
+		// Stored as a raw binary string; never log the value directly — use MaskPAN
+		// for PAN (F2); F52 must not appear in any log output.
+		52: field.NewString(&field.Spec{
+			Length:      8,
+			Description: "PIN Block",
+			Enc:         encoding.Binary,
 			Pref:        prefix.ASCII.Fixed,
 		}),
 		// F63 – Reserved Private (LLLVAR, up to 999 chars)
@@ -200,6 +220,16 @@ var DiscoverSpec = &iso8583.MessageSpec{
 		70: field.NewString(&field.Spec{
 			Length:      3,
 			Description: "Network Management Information Code",
+			Enc:         encoding.ASCII,
+			Pref:        prefix.ASCII.Fixed,
+		}),
+		// F90 – Original Data Elements (42 chars, fixed).
+		// Field 90 sits in the secondary bitmap range (fields 65–128). Defining it
+		// here ensures moov-io/iso8583 can unpack messages that carry a secondary
+		// bitmap without returning a "field not defined in spec" error.
+		90: field.NewString(&field.Spec{
+			Length:      42,
+			Description: "Original Data Elements",
 			Enc:         encoding.ASCII,
 			Pref:        prefix.ASCII.Fixed,
 		}),

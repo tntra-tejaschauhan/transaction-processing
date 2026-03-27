@@ -160,10 +160,10 @@ func (c *Conn) processFrame() (skip bool, err error) {
 		return false, fmt.Errorf("unpack iso8583 message: %w", err)
 	}
 
-	// Dispatch to handler. HandleMessage ALWAYS returns a non-nil response
-	// for any decodable frame (unknown/invalid MTI → 0810 F39=12). A non-nil
-	// error means a fatal internal failure — treat it as fatal and close.
-	outMsg, err := iso.HandleMessage(inMsg)
+	// Dispatch to handler — returns the response message.
+	// The logger is passed so 0100 auth requests can emit a masked-PAN debug log
+	// (PCI requirement). The handler never logs plaintext PAN.
+	outMsg, err := iso.HandleMessage(inMsg, c.logger)
 	if err != nil {
 		c.logger.Error().Err(err).Msg("fatal handle message error — closing connection")
 		return false, fmt.Errorf("handle message: %w", err)
