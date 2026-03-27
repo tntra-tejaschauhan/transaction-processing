@@ -92,12 +92,17 @@ func TestHandleMessage_Echo0800(t *testing.T) {
 	assert.Equal(t, req.NetworkMgmtInfoCode, resp.NetworkMgmtInfoCode)
 }
 
-// TestHandleMessage_UnknownMTI ensures that an unsupported MTI returns an
-// error and does not panic.
+// TestHandleMessage_UnknownMTI ensures that an unsupported MTI returns
+// a 0810 F39=12 response — NOT a Go error — and does not panic.
 func TestHandleMessage_UnknownMTI(t *testing.T) {
 	msg := iso8583.NewMessage(iso.DiscoverSpec)
 	msg.MTI("0200")
 
-	_, err := iso.HandleMessage(msg)
-	assert.Error(t, err, "unsupported MTI must return an error, not panic")
+	resp, err := iso.HandleMessage(msg)
+	assert.NoError(t, err, "unsupported MTI must return (msg, nil), not an error")
+	assert.NotNil(t, resp, "must always return a non-nil response message")
+
+	var got iso.EchoResponse
+	require.NoError(t, resp.Unmarshal(&got))
+	assert.Equal(t, "12", got.ResponseCode, "F39 must be 12 for unsupported MTI")
 }
