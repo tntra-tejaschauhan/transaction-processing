@@ -6,6 +6,8 @@ import (
 	"github.com/moov-io/iso8583"
 )
 
+var defaultRegistry = NewHandlerRegistry()
+
 // HandleMessage receives a parsed, unpacked ISO 8583 message and returns an
 // appropriate response message.
 //
@@ -21,12 +23,7 @@ func HandleMessage(msg *iso8583.Message) (*iso8583.Message, error) {
 		return nil, fmt.Errorf("HandleMessage: get MTI: %w", err)
 	}
 
-	switch mti {
-	case "0800":
-		return handleEchoRequest(msg)
-	default:
-		return nil, fmt.Errorf("HandleMessage: unsupported MTI %q", mti)
-	}
+	return defaultRegistry.Dispatch(mti, msg)
 }
 
 // handleEchoRequest processes an 0800 Network Management Request.
