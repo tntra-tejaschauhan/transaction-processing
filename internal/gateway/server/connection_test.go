@@ -34,6 +34,7 @@ func testConnOpts() *ServerOptions {
 		MaxConnections:  10,
 		ShutdownTimeout: 2 * time.Second,
 		BufSize:         8192,
+		IdleTimeout:     3 * time.Second,
 	}
 }
 
@@ -288,6 +289,31 @@ func (s *testSuiteConn) TestReadLoop_ReadDeadlineEnforced() {
 	})
 }
 
+func (s *testSuiteConn) TestReadLoop_IdleTimeoutEnforced() {
+	s.Run("when client sends nothing then connection is closed after idle timeout", func() {
+		opts := testConnOpts()
+		opts.ReadTimeout = 50 * time.Millisecond
+		opts.IdleTimeout = 100 * time.Millisecond
+		c, client := testConn(opts)
+
+		handleDone := make(chan struct{})
+		go func() {
+			defer close(handleDone)
+			c.handle(context.Background())
+		}()
+
+		// Do not send anything. Wait just past the idle timeout.
+		select {
+		case <-handleDone:
+			// handle timed out and exited — correct
+		case <-time.After(300 * time.Millisecond):
+			s.Fail("handle did not exit after idle timeout")
+		}
+
+		client.Close()
+	})
+}
+
 // ── isGracefulClose ───────────────────────────────────────────────────────────
 
 func (s *testSuiteConn) TestIsGracefulClose_EOF() {
@@ -361,6 +387,57 @@ func (s *testSuiteConn) TestProcessFrame_WriteDeadlineError() {
 			s.Fail("handle did not exit after write deadline")
 		}
 		client.Close()
+	})
+}
+
+func (s *testSuiteConn) TestProcessFrame_UnpackError() {
+	s.Run("when client sends garbage data then connection is closed with unpack error", func() {
+		c, client := testConn(testConnOpts())
+
+		handleDone := make(chan struct{})
+		go func() {
+			defer close(handleDone)
+			c.handle(context.Background())
+		}()
+
+		// Send 5 bytes of garbage
+		garbage := []byte("hello")
+		header := iso.NewNetworkHeader()
+		s.Require().NoError(header.SetLength(len(garbage)))
+		_, err := header.WriteTo(client)
+		s.Require().NoError(err)
+		_, err = client.Write(garbage)
+		s.Require().NoError(err)
+
+		select {
+		case <-handleDone:
+			// handle exited due to unpack error — correct
+		case <-time.After(2 * time.Second):
+			s.Fail("handle did not exit after unpack error")
+		}
+		client.Close()
+	})
+}
+
+func (s *testSuiteConn) TestWrite_ExcessLength() {
+	s.Run("when payload is too large then write returns error", func() {
+		c, client := testConn(testConnOpts())
+		defer client.Close()
+		hugePayload := make([]byte, 70000)
+		err := c.write(hugePayload)
+		s.Require().Error(err)
+		s.Assert().Contains(err.Error(), "set frame length:")
+	})
+}
+
+func (s *testSuiteConn) TestProcessFrame_DeadlineError() {
+	s.Run("when connection is closed then processFrame returns deadline error", func() {
+		c, client := testConn(testConnOpts())
+		c.conn.Close()
+		client.Close()
+		_, err := c.processFrame()
+		s.Require().Error(err)
+		s.Assert().Contains(err.Error(), "set idle read deadline")
 	})
 }
 

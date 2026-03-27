@@ -18,6 +18,7 @@ type GatewayConfig struct {
 	MaxConnections    int `yaml:"max_connections"     env:"GATEWAY_MAX_CONNECTIONS"     env-default:"10000"`
 	ShutdownTimeoutMs int `yaml:"shutdown_timeout_ms" env:"GATEWAY_SHUTDOWN_TIMEOUT_MS" env-default:"5000"`
 	BufSize           int `yaml:"buf_size"            env:"GATEWAY_BUF_SIZE"            env-default:"8192"`
+	IdleTimeoutMs     int `yaml:"idle_timeout_ms"     env:"GATEWAY_IDLE_TIMEOUT_MS"     env-default:"60000"`
 }
 
 // Config is the top-level application configuration read from environment variables.

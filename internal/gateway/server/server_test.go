@@ -212,6 +212,33 @@ func (s *testSuiteServer) TestStop_DrainWithinShutdownTimeout() {
 	})
 }
 
+func (s *testSuiteServer) TestStop_Timeout() {
+	s.Run("when connections do not drain then Stop times out", func() {
+		opts := testOptions(s.T())
+		opts.ShutdownTimeout = 50 * time.Millisecond // very short timeout
+		opts.IdleTimeout = 2 * time.Second           // long enough so read blocks and doesn't exit immediately 
+		srv, err := New(opts, testLogger())
+		s.Require().NoError(err)
+		
+		s.Require().NoError(srv.Start(context.Background()))
+		
+		// Create a connection that never sends anything.
+		// It will block in handleConn -> readLoop.
+		conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", opts.Port))
+		s.Require().NoError(err)
+		defer conn.Close()
+		
+		time.Sleep(30 * time.Millisecond) // Let it be accepted
+		
+		// The server's handleConn is blocked reading. Stop will time out.
+		start := time.Now()
+		srv.Stop()
+		elapsed := time.Since(start)
+		
+		s.Assert().GreaterOrEqual(elapsed, opts.ShutdownTimeout)
+	})
+}
+
 // ── Context cancellation ──────────────────────────────────────────────────────
 
 func (s *testSuiteServer) TestStart_ContextCancelled() {
@@ -240,6 +267,47 @@ func (s *testSuiteServer) TestStart_ContextCancelled() {
 		case <-time.After(3 * time.Second):
 			s.Fail("Stop() did not return after context cancel")
 		}
+	})
+}
+
+// mockListener implements net.Listener for testing Accept errors
+type mockListener struct {
+	acceptFunc func() (net.Conn, error)
+}
+func (m *mockListener) Accept() (net.Conn, error) { return m.acceptFunc() }
+func (m *mockListener) Close() error              { return nil }
+func (m *mockListener) Addr() net.Addr            { return &net.TCPAddr{} }
+
+func (s *testSuiteServer) TestAcceptLoop_Errors() {
+	s.Run("accept loop recovers from temporary timeout and exits on fatal error", func() {
+		opts := testOptions(s.T())
+		srv, err := New(opts, testLogger())
+		s.Require().NoError(err)
+		
+		// Swap real listener with our mock
+		srv.mu.Lock()
+		srv.listener.Close() // Close the real one
+		
+		calls := 0
+		mock := &mockListener{
+			acceptFunc: func() (net.Conn, error) {
+				calls++
+				if calls == 1 {
+					// First call: return temporary timeout to hit line 152
+					return nil, &mockNetError{timeout: true}
+				}
+				// Second call: return fatal error to hit line 161 and exit loop
+				return nil, fmt.Errorf("fatal error")
+			},
+		}
+		srv.listener = mock
+		srv.mu.Unlock()
+
+		// Run accept loop directly in this goroutine
+		// It will return on the fatal error (second call)
+		srv.acceptLoop(context.Background())
+		
+		s.Assert().Equal(2, calls, "acceptLoop should retry after timeout and exit after fatal")
 	})
 }
 

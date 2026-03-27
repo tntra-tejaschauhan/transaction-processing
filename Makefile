@@ -26,7 +26,7 @@ bench-gateway:
 # ── E2E (requires running gateway binary) ────────────────────────────────────
 e2e-gateway: build-gateway
 	@echo "Starting gateway..."
-	@./bin/gateway &
+	@GATEWAY_MAX_CONNECTIONS=5 GATEWAY_IDLE_TIMEOUT_MS=2000 GATEWAY_READ_TIMEOUT_MS=1000 ./bin/gateway &
 	@sleep 1
 	go test -tags e2e -v ./api/gateway/...
 	@pkill -f bin/gateway || true

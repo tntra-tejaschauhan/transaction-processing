@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/moov-io/iso8583"
+	"github.com/moov-io/iso8583/field"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -100,4 +101,28 @@ func TestHandleMessage_UnknownMTI(t *testing.T) {
 
 	_, err := iso.HandleMessage(msg)
 	assert.Error(t, err, "unsupported MTI must return an error, not panic")
+}
+
+
+// TestBuildEcho0810_MarshalError tests the error path when message marshaling fails.
+func TestBuildEcho0810_MarshalError(t *testing.T) {
+	originalSpec := iso.DiscoverSpec
+	// Provide a spec missing field 11. Marshal will fail because the struct
+	// has a field mapped to 11, but the spec does not contain field 11.
+	iso.DiscoverSpec = &iso8583.MessageSpec{
+		Fields: map[int]field.Field{
+			0: field.NewString(&field.Spec{Length: 4}), 
+			1: field.NewBitmap(&field.Spec{Length: 8}),
+		},
+	}
+	defer func() { iso.DiscoverSpec = originalSpec }()
+
+	req := &iso.EchoRequest{
+		STAN: "123456",
+		NetworkMgmtInfoCode: "301",
+	}
+
+	_, err := iso.BuildEcho0810(req)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "marshal response:")
 }

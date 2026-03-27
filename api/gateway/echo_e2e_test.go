@@ -388,3 +388,100 @@ func (s *testSuiteE2E) TestFraming_ValidExact200() {
 	})
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// Scenario 4: MOD-71 Limits and Timeouts
+// ────────────────────────────────────────────────────────────────────────────
+
+func (s *testSuiteE2E) TestConnectionLimit() {
+	s.Run("MaxConnections limit drops excess clients but keeps active ones alive", func() {
+		// e2e-gateway Makefile override sets MaxConnections=5
+		const limit = 5
+		var activeConns []net.Conn
+
+		// Open limit number of connections successfully
+		for i := 0; i < limit; i++ {
+			c, err := net.Dial("tcp", s.gatewayAddr)
+			require.NoError(s.T(), err)
+			activeConns = append(activeConns, c)
+		}
+
+		defer func() {
+			for _, c := range activeConns {
+				c.Close()
+			}
+		}()
+
+		// Try to open N+1 connection
+		overLimitConn, err := net.Dial("tcp", s.gatewayAddr)
+		require.NoError(s.T(), err)
+		defer overLimitConn.Close()
+
+		// The TCP handshake works, but the server immediately closes it.
+		// Wait a small bit and read to confirm it was closed (EOF).
+		time.Sleep(50 * time.Millisecond)
+		buf := make([]byte, 1)
+		_, err = overLimitConn.Read(buf)
+		require.Error(s.T(), err, "N+1 connection should be closed by server")
+		require.Equal(s.T(), io.EOF, err)
+
+		// Verify existing connection 0 is still perfectly healthy
+		activeConns[0].SetWriteDeadline(time.Now().Add(time.Second))
+		activeConns[0].SetReadDeadline(time.Now().Add(time.Second))
+		
+		req := iso.EchoRequest{STAN: "987654", NetworkMgmtInfoCode: "301"}
+		msg := iso8583.NewMessage(iso.DiscoverSpec)
+		require.NoError(s.T(), msg.Marshal(&req))
+		msg.MTI("0800")
+		packed, err := msg.Pack()
+		require.NoError(s.T(), err)
+
+		lenBuf := []byte{byte(len(packed) >> 8), byte(len(packed))}
+		_, err = activeConns[0].Write(lenBuf)
+		require.NoError(s.T(), err)
+		_, err = activeConns[0].Write(packed)
+		require.NoError(s.T(), err)
+
+		lenBufRecv := make([]byte, 2)
+		_, err = io.ReadFull(activeConns[0], lenBufRecv)
+		require.NoError(s.T(), err, "Original connections must survive limit trigger")
+	})
+}
+
+func (s *testSuiteE2E) TestIdleTimeout() {
+	s.Run("connection is dropped if no payload initializes before IdleTimeout expires", func() {
+		// Makefile sets IDLE_TIMEOUT=2000ms
+		c, err := net.Dial("tcp", s.gatewayAddr)
+		require.NoError(s.T(), err)
+		defer c.Close()
+
+		// Wait longer than idle timeout
+		time.Sleep(2500 * time.Millisecond)
+
+		buf := make([]byte, 1)
+		_, err = c.Read(buf)
+		require.Error(s.T(), err)
+		require.Equal(s.T(), io.EOF, err)
+	})
+}
+
+func (s *testSuiteE2E) TestSlowClientWriteTimeout() {
+	s.Run("server drops client that stalls mid-frame triggering ReadTimeout", func() {
+		// Makefile sets READ_TIMEOUT=1000ms
+		c, err := net.Dial("tcp", s.gatewayAddr)
+		require.NoError(s.T(), err)
+		defer c.Close()
+
+		// Send ONLY the length prefix of an arbitrarily massive frame.
+		// The server initiates body read and blocks on ReadTimeout.
+		_, err = c.Write([]byte{0x01, 0x00}) // 256 byte frame claims
+		require.NoError(s.T(), err)
+
+		// Wait past ReadTimeout
+		time.Sleep(1500 * time.Millisecond)
+
+		buf := make([]byte, 1)
+		_, err = c.Read(buf)
+		require.Error(s.T(), err)
+		require.Equal(s.T(), io.EOF, err)
+	})
+}
