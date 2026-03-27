@@ -461,12 +461,13 @@ func (s *testSuiteConn) TestProcessFrame_HandleMessageFatalError() {
 		c, client := testConn(opts)
 		defer client.Close()
 
-		// Send a frame that is valid ISO framing but will cause 
-		// HandleMessage to fail (e.g. valid length but no content).
-		header := iso.NewNetworkHeader()
-		header.SetLength(4) 
-		header.WriteTo(client)
-		client.Write([]byte("malf"))
+		// Send writing to a goroutine because net.Pipe is synchronous and blocks.
+		go func() {
+			header := iso.NewNetworkHeader()
+			header.SetLength(4) 
+			header.WriteTo(client)
+			client.Write([]byte("malf"))
+		}()
 
 		_, err := c.processFrame()
 		s.Assert().Error(err)
