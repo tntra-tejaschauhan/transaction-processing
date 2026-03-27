@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"net"
 	"testing"
@@ -622,6 +623,177 @@ func (s *testSuiteConn) TestSendErrorResponse_WritesValidF39_30() {
 		code, err := respMsg.GetString(39)
 		s.Require().NoError(err)
 		s.Assert().Equal("30", code)
+	})
+}
+
+func (s *testSuiteConn) TestReadLoop_UnknownMTI_Sends0810F39_12_AndContinues() {
+	s.Run("when client sends unknown MTI then server sends 0810 F39=12 and connection stays open", func() {
+		c, client := testConn(testConnOpts())
+
+		ctx, cancel := context.WithCancel(context.Background())
+		handleDone := make(chan struct{})
+		go func() {
+			defer close(handleDone)
+			c.handle(ctx)
+		}()
+
+		// Build and send an unknown (but format-valid) MTI.
+		unknownMsg := iso8583.NewMessage(iso.DiscoverSpec)
+		unknownMsg.MTI("9999")
+		packed, err := unknownMsg.Pack()
+		s.Require().NoError(err)
+
+		header := iso.NewNetworkHeader()
+		s.Require().NoError(header.SetLength(len(packed)))
+		_, err = header.WriteTo(client)
+		s.Require().NoError(err)
+		_, err = client.Write(packed)
+		s.Require().NoError(err)
+
+		// MOD-72: server MUST now send back 0810 F39=12 on the wire.
+		respHeader := iso.NewNetworkHeader()
+		_, err = respHeader.ReadFrom(client)
+		s.Require().NoError(err, "expected 0810 F39=12 response for unknown MTI")
+
+		respBuf := make([]byte, respHeader.Length())
+		_, err = io.ReadFull(client, respBuf)
+		s.Require().NoError(err)
+
+		respMsg := iso8583.NewMessage(iso.DiscoverSpec)
+		s.Require().NoError(respMsg.Unpack(respBuf))
+
+		mti, err := respMsg.GetMTI()
+		s.Require().NoError(err)
+		s.Assert().Equal("0810", mti, "response MTI must be 0810")
+
+		var resp iso.EchoResponse
+		s.Require().NoError(respMsg.Unmarshal(&resp))
+		s.Assert().Equal("12", resp.ResponseCode, "F39 must be 12 for unknown MTI")
+
+		// Connection must stay open after receiving the 0810 F39=12.
+		select {
+		case <-handleDone:
+			s.Fail("handle must NOT exit after unknown MTI — connection should stay open")
+		default:
+			// correct — still running
+		}
+
+		cancel()
+		client.Close()
+		<-handleDone
+	})
+}
+
+func (s *testSuiteConn) TestReadLoop_NonNumericMTI_Sends0810F39_12() {
+	s.Run("when client sends non-numeric MTI then server sends 0810 F39=12 and connection stays open", func() {
+		c, client := testConn(testConnOpts())
+
+		ctx, cancel := context.WithCancel(context.Background())
+		handleDone := make(chan struct{})
+		go func() {
+			defer close(handleDone)
+			c.handle(ctx)
+		}()
+
+		// Build and send an ABCD (non-numeric) MTI message.
+		badMsg := iso8583.NewMessage(iso.DiscoverSpec)
+		badMsg.MTI("ABCD")
+		packed, err := badMsg.Pack()
+		s.Require().NoError(err)
+
+		header := iso.NewNetworkHeader()
+		s.Require().NoError(header.SetLength(len(packed)))
+		_, err = header.WriteTo(client)
+		s.Require().NoError(err)
+		_, err = client.Write(packed)
+		s.Require().NoError(err)
+
+		// Read 0810 F39=12 response.
+		respHeader := iso.NewNetworkHeader()
+		_, err = respHeader.ReadFrom(client)
+		s.Require().NoError(err)
+
+		respBuf := make([]byte, respHeader.Length())
+		_, err = io.ReadFull(client, respBuf)
+		s.Require().NoError(err)
+
+		respMsg := iso8583.NewMessage(iso.DiscoverSpec)
+		s.Require().NoError(respMsg.Unpack(respBuf))
+
+		var resp iso.EchoResponse
+		s.Require().NoError(respMsg.Unmarshal(&resp))
+		s.Assert().Equal("12", resp.ResponseCode)
+
+		cancel()
+		client.Close()
+		<-handleDone
+	})
+}
+
+// mockConn is a net.Conn that fails on specific operations to test error paths.
+type mockConn struct {
+	net.Conn
+	failWrite        bool
+	failSetDeadline bool
+}
+
+func (m *mockConn) Write(b []byte) (int, error) {
+	if m.failWrite { return 0, fmt.Errorf("mock write error") }
+	return m.Conn.Write(b)
+}
+func (m *mockConn) SetWriteDeadline(t time.Time) error {
+	if m.failSetDeadline { return fmt.Errorf("mock deadline error") }
+	return m.Conn.SetWriteDeadline(t)
+}
+
+// ── processFrame — Fatal Handler Error ───────────────────────────────────────
+
+func (s *testSuiteConn) TestProcessFrame_HandleMessageFatalError() {
+	s.Run("when HandleMessage returns error then processFrame returns error", func() {
+		opts := testConnOpts()
+		c, client := testConn(opts)
+		defer client.Close()
+
+		// Send writing to a goroutine because net.Pipe is synchronous and blocks.
+		go func() {
+			header := iso.NewNetworkHeader()
+			header.SetLength(4) 
+			header.WriteTo(client)
+			client.Write([]byte("malf"))
+		}()
+
+		_, err := c.processFrame()
+		s.Assert().Error(err)
+	})
+}
+
+// ── write — I/O Failures ─────────────────────────────────────────────────────
+
+func (s *testSuiteConn) TestWrite_SetDeadlineError() {
+	s.Run("when SetWriteDeadline fails then write returns error", func() {
+		pipeClient, pipeServer := net.Pipe()
+		defer pipeClient.Close()
+		
+		mock := &mockConn{Conn: pipeServer, failSetDeadline: true}
+		c := newConn(mock, testConnOpts(), zerolog.Nop())
+
+		err := c.write([]byte("data"))
+		s.Assert().Error(err)
+		s.Assert().Contains(err.Error(), "set write deadline")
+	})
+}
+
+func (s *testSuiteConn) TestWrite_NetworkWriteError() {
+	s.Run("when network write fails then write returns error", func() {
+		pipeClient, pipeServer := net.Pipe()
+		mock := &mockConn{Conn: pipeServer, failWrite: true}
+		c := newConn(mock, testConnOpts(), zerolog.Nop())
+
+		pipeClient.Close() // Close client so write fails
+
+		err := c.write([]byte("data"))
+		s.Assert().Error(err)
+		s.Assert().Contains(err.Error(), "write")
 	})
 }
 

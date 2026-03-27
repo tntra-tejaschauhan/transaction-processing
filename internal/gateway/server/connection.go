@@ -85,8 +85,8 @@ func (c *Conn) readLoop(ctx context.Context) error {
 		}
 
 		// Delegate the read→unpack→handle→write pipeline for one frame.
-		// processFrame returns (true, nil) on a handled error to continue,
-		// or (false, err) on a fatal error to stop the loop.
+		// processFrame returns (false, nil) on success or (false, err) on any
+		// fatal error — there is no longer a skip/continue path for MTI errors.
 		skip, err := c.processFrame()
 		if err != nil {
 			return err
@@ -101,6 +101,12 @@ func (c *Conn) readLoop(ctx context.Context) error {
 // single ISO 8583 frame. It returns (true, nil) when the frame was handled
 // but the caller should continue reading (e.g. zero-length or oversized frame
 // responded with 0810 F39=30), or (false, err) when a fatal I/O error occurred.
+
+// but the caller should continue reading (e.g. unknown MTI), or (false, err)
+// when a fatal I/O or parsing error occurred.
+//
+// HandleMessage now guarantees a non-nil response for any valid frame
+// (including unknown/invalid MTIs → 0810 F39=12).
 func (c *Conn) processFrame() (skip bool, err error) {
 	// HARD RULE (§4.6): explicit read deadline before every blocking read.
 	// Use IdleTimeout to bound the wait for a NEW frame header to arrive. 
@@ -154,12 +160,19 @@ func (c *Conn) processFrame() (skip bool, err error) {
 		return false, fmt.Errorf("unpack iso8583 message: %w", err)
 	}
 
-	// Dispatch to handler — returns the response message.
+	// Dispatch to handler. HandleMessage ALWAYS returns a non-nil response
+	// for any decodable frame (unknown/invalid MTI → 0810 F39=12). A non-nil
+	// error means a fatal internal failure — treat it as fatal and close.
 	outMsg, err := iso.HandleMessage(inMsg)
 	if err != nil {
-		// Unknown MTI — log and signal caller to continue reading.
-		c.logger.Warn().Err(err).Msg("handle message error")
-		return true, nil
+		c.logger.Error().Err(err).Msg("fatal handle message error — closing connection")
+		return false, fmt.Errorf("handle message: %w", err)
+	}
+
+	// Safety guard: should never happen if HandleMessage's contract holds.
+	if outMsg == nil {
+		c.logger.Error().Msg("handle message returned nil response without error — closing connection")
+		return false, fmt.Errorf("handle message: nil response (contract violation)")
 	}
 
 	// Pack the response message back to raw bytes.
