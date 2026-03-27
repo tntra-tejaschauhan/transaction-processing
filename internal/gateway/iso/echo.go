@@ -2,7 +2,6 @@ package iso
 
 import (
 	"fmt"
-
 	"github.com/moov-io/iso8583"
 )
 
@@ -27,6 +26,7 @@ func BuildEcho0810(req *EchoRequest) (*iso8583.Message, error) {
 
 	msg := iso8583.NewMessage(DiscoverSpec)
 
+	// _ = msg.Marshal(&resp)
 	if err := msg.Marshal(&resp); err != nil {
 		return nil, fmt.Errorf("BuildEcho0810: marshal response: %w", err)
 	}

@@ -228,3 +228,49 @@ func (s *testSuiteE2E) TestResponseCodeAlwaysApproved() {
 		}
 	})
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// SLA: Response latency must be within 100 ms
+// ────────────────────────────────────────────────────────────────────────────
+
+func (s *testSuiteE2E) TestEcho_ResponseWithin100ms() {
+	s.Run("each echo (F70=301) round-trip must complete within 100ms", func() {
+		client, err := New(s.gatewayAddr)
+		require.NoError(s.T(), err, "failed to connect to gateway")
+		defer client.Close()
+
+		const iterations = 10
+		for i := 0; i < iterations; i++ {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			start := time.Now()
+			_, err := client.SendEcho(ctx, "301301", "301")
+			elapsed := time.Since(start)
+			cancel()
+
+			require.NoError(s.T(), err, "SendEcho iteration %d failed", i+1)
+			require.Less(s.T(), elapsed, 100*time.Millisecond,
+				"echo response exceeded 100ms SLA on iteration %d (got %s)", i+1, elapsed)
+		}
+	})
+}
+
+func (s *testSuiteE2E) TestSignOn_ResponseWithin100ms() {
+	s.Run("each sign-on (F70=001) round-trip must complete within 100ms", func() {
+		client, err := New(s.gatewayAddr)
+		require.NoError(s.T(), err, "failed to connect to gateway")
+		defer client.Close()
+
+		const iterations = 10
+		for i := 0; i < iterations; i++ {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			start := time.Now()
+			_, err := client.SendEcho(ctx, "001001", "001")
+			elapsed := time.Since(start)
+			cancel()
+
+			require.NoError(s.T(), err, "SendEcho (sign-on) iteration %d failed", i+1)
+			require.Less(s.T(), elapsed, 100*time.Millisecond,
+				"sign-on response exceeded 100ms SLA on iteration %d (got %s)", i+1, elapsed)
+		}
+	})
+}
