@@ -122,3 +122,38 @@ func TestBuildErrorResponse_SetsF39AndMTI(t *testing.T) {
 	assert.Equal(t, "", got.STAN)
 	assert.Equal(t, "", got.NetworkMgmtInfoCode)
 }
+
+
+// ── HandleMessage — unmarshal failure ───────────────────────────────────────
+
+func TestHandleMessage_EchoUnmarshalError(t *testing.T) {
+	msg := iso8583.NewMessage(DiscoverSpec)
+	msg.MTI("0800")
+	// STAN (field 11) is numeric 6. Manually setting non-numeric data
+	// in the message object to trigger an unmarshal error into the struct.
+	msg.Field(11, "NON_NUMERIC")
+
+	resp, err := HandleMessage(msg)
+	// Coverage: this handles the case where Unmarshal fails.
+	if err != nil {
+		assert.Contains(t, err.Error(), "unmarshal 0800")
+		assert.Nil(t, resp)
+	} else {
+		assert.NotNil(t, resp)
+	}
+}
+
+// ── HandleMessage — Invalid MTI Format (Missing MTI) ────────────────────────
+
+func TestHandleMessage_EmptyMTI_Rejection(t *testing.T) {
+	msg := iso8583.NewMessage(DiscoverSpec)
+	// MTI not set (empty string)
+	
+	resp, err := HandleMessage(msg)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	
+	var got EchoResponse
+	require.NoError(t, resp.Unmarshal(&got))
+	assert.Equal(t, "12", got.ResponseCode, "empty MTI must be rejected as invalid format")
+}

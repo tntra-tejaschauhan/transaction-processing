@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"io"
 	"net"
 	"testing"
@@ -433,5 +434,71 @@ func (s *testSuiteConn) TestReadLoop_NonNumericMTI_Sends0810F39_12() {
 		cancel()
 		client.Close()
 		<-handleDone
+	})
+}
+
+// mockConn is a net.Conn that fails on specific operations to test error paths.
+type mockConn struct {
+	net.Conn
+	failWrite        bool
+	failSetDeadline bool
+}
+
+func (m *mockConn) Write(b []byte) (int, error) {
+	if m.failWrite { return 0, fmt.Errorf("mock write error") }
+	return m.Conn.Write(b)
+}
+func (m *mockConn) SetWriteDeadline(t time.Time) error {
+	if m.failSetDeadline { return fmt.Errorf("mock deadline error") }
+	return m.Conn.SetWriteDeadline(t)
+}
+
+// ── processFrame — Fatal Handler Error ───────────────────────────────────────
+
+func (s *testSuiteConn) TestProcessFrame_HandleMessageFatalError() {
+	s.Run("when HandleMessage returns error then processFrame returns error", func() {
+		opts := testConnOpts()
+		c, client := testConn(opts)
+		defer client.Close()
+
+		// Send a frame that is valid ISO framing but will cause 
+		// HandleMessage to fail (e.g. valid length but no content).
+		header := iso.NewNetworkHeader()
+		header.SetLength(4) 
+		header.WriteTo(client)
+		client.Write([]byte("malf"))
+
+		_, err := c.processFrame()
+		s.Assert().Error(err)
+	})
+}
+
+// ── write — I/O Failures ─────────────────────────────────────────────────────
+
+func (s *testSuiteConn) TestWrite_SetDeadlineError() {
+	s.Run("when SetWriteDeadline fails then write returns error", func() {
+		pipeClient, pipeServer := net.Pipe()
+		defer pipeClient.Close()
+		
+		mock := &mockConn{Conn: pipeServer, failSetDeadline: true}
+		c := newConn(mock, testConnOpts(), zerolog.Nop())
+
+		err := c.write([]byte("data"))
+		s.Assert().Error(err)
+		s.Assert().Contains(err.Error(), "set write deadline")
+	})
+}
+
+func (s *testSuiteConn) TestWrite_NetworkWriteError() {
+	s.Run("when network write fails then write returns error", func() {
+		pipeClient, pipeServer := net.Pipe()
+		mock := &mockConn{Conn: pipeServer, failWrite: true}
+		c := newConn(mock, testConnOpts(), zerolog.Nop())
+
+		pipeClient.Close() // Close client so write fails
+
+		err := c.write([]byte("data"))
+		s.Assert().Error(err)
+		s.Assert().Contains(err.Error(), "write")
 	})
 }
