@@ -170,8 +170,11 @@ func (c *Client) Close() error {
 // writeFrame writes data to conn as: 2-byte big-endian length + data.
 // This matches the framing protocol used by the gateway.
 func (c *Client) writeFrame(body []byte) error {
+	if len(body) > 65535 {
+		return fmt.Errorf("writeFrame: body too large (%d bytes, max 65535)", len(body))
+	}
 	lenBuf := make([]byte, 2)
-	binary.BigEndian.PutUint16(lenBuf, uint16(len(body)))
+	binary.BigEndian.PutUint16(lenBuf, uint16(len(body))) //nolint:gosec // bounds checked above
 
 	if _, err := c.conn.Write(lenBuf); err != nil {
 		return err
@@ -205,8 +208,8 @@ func (c *Client) readFrameWithContext(ctx context.Context) ([]byte, error) {
 		if err := c.conn.SetReadDeadline(deadline); err != nil {
 			return nil, err
 		}
-		// Reset deadline after we finish.
-		defer c.conn.SetReadDeadline(time.Time{})
+		// Reset deadline after we finish — best-effort, connection may already be closed.
+		defer func() { _ = c.conn.SetReadDeadline(time.Time{}) }() //nolint:errcheck // reset is best-effort
 	}
 
 	// Check if context is already cancelled before we start.

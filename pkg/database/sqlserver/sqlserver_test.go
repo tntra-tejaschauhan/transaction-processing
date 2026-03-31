@@ -16,7 +16,7 @@ import (
 type fakeSQLServerDriver struct{}
 type fakeSQLServerConn struct{}
 
-func (fakeSQLServerDriver) Open(_ string) (driver.Conn, error) { return fakeSQLServerConn{}, nil }
+func (fakeSQLServerDriver) Open(_ string) (driver.Conn, error)  { return fakeSQLServerConn{}, nil }
 func (fakeSQLServerConn) Prepare(_ string) (driver.Stmt, error) { return nil, nil }
 func (fakeSQLServerConn) Close() error                          { return nil }
 func (fakeSQLServerConn) Begin() (driver.Tx, error)             { return nil, nil }

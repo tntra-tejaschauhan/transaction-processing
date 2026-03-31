@@ -1,7 +1,10 @@
 package iso
+
 import (
 	"testing"
+
 	"github.com/moov-io/iso8583"
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -40,13 +43,12 @@ func TestValidateMTI_InvalidCases(t *testing.T) {
 
 // ── HandleMessage — valid echo ────────────────────────────────────────────────
 
-
 func TestHandleMessage_Valid0800_Returns0810F39_00(t *testing.T) {
 	req := EchoRequest{STAN: "123456", NetworkMgmtInfoCode: "301"}
 	msg := iso8583.NewMessage(DiscoverSpec)
 	require.NoError(t, msg.Marshal(&req))
 	msg.MTI("0800")
-	resp, err := HandleMessage(msg)
+	resp, err := HandleMessage(msg, zerolog.Nop())
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	mti, err := resp.GetMTI()
@@ -65,7 +67,7 @@ func TestHandleMessage_Unknown9999_Returns0810F39_12(t *testing.T) {
 	msg := iso8583.NewMessage(DiscoverSpec)
 	msg.MTI("9999")
 	// MOD-72: must return (msg, nil) — NOT (nil, error).
-	resp, err := HandleMessage(msg)
+	resp, err := HandleMessage(msg, zerolog.Nop())
 	require.NoError(t, err, "unknown numeric MTI must not return a Go error")
 	require.NotNil(t, resp)
 	mti, err := resp.GetMTI()
@@ -81,7 +83,7 @@ func TestHandleMessage_Unknown9999_Returns0810F39_12(t *testing.T) {
 func TestHandleMessage_NonNumericABCD_Returns0810F39_12(t *testing.T) {
 	msg := iso8583.NewMessage(DiscoverSpec)
 	msg.MTI("ABCD")
-	resp, err := HandleMessage(msg)
+	resp, err := HandleMessage(msg, zerolog.Nop())
 	require.NoError(t, err, "non-numeric MTI must not return a Go error")
 	require.NotNil(t, resp)
 	mti, err := resp.GetMTI()
@@ -97,7 +99,7 @@ func TestHandleMessage_NonNumericABCD_Returns0810F39_12(t *testing.T) {
 func TestHandleMessage_ShortMTI_Returns0810F39_12(t *testing.T) {
 	msg := iso8583.NewMessage(DiscoverSpec)
 	msg.MTI("080") // 3 digits instead of 4
-	resp, err := HandleMessage(msg)
+	resp, err := HandleMessage(msg, zerolog.Nop())
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 	var got EchoResponse
@@ -123,7 +125,6 @@ func TestBuildErrorResponse_SetsF39AndMTI(t *testing.T) {
 	assert.Equal(t, "", got.NetworkMgmtInfoCode)
 }
 
-
 // ── HandleMessage — unmarshal failure ───────────────────────────────────────
 
 func TestHandleMessage_EchoUnmarshalError(t *testing.T) {
@@ -133,7 +134,7 @@ func TestHandleMessage_EchoUnmarshalError(t *testing.T) {
 	// in the message object to trigger an unmarshal error into the struct.
 	msg.Field(11, "NON_NUMERIC")
 
-	resp, err := HandleMessage(msg)
+	resp, err := HandleMessage(msg, zerolog.Nop())
 	// Coverage: this handles the case where Unmarshal fails.
 	if err != nil {
 		assert.Contains(t, err.Error(), "unmarshal 0800")
@@ -148,11 +149,11 @@ func TestHandleMessage_EchoUnmarshalError(t *testing.T) {
 func TestHandleMessage_EmptyMTI_Rejection(t *testing.T) {
 	msg := iso8583.NewMessage(DiscoverSpec)
 	// MTI not set (empty string)
-	
-	resp, err := HandleMessage(msg)
+
+	resp, err := HandleMessage(msg, zerolog.Nop())
 	require.NoError(t, err)
 	require.NotNil(t, resp)
-	
+
 	var got EchoResponse
 	require.NoError(t, resp.Unmarshal(&got))
 	assert.Equal(t, "12", got.ResponseCode, "empty MTI must be rejected as invalid format")

@@ -4,25 +4,12 @@ import (
 	"testing"
 
 	"github.com/moov-io/iso8583"
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/require"
 
 	"github.com/PayWithSpireInc/transaction-processing/internal/gateway/iso"
 )
 
-// testHandler is a mock MessageHandler for testing the registry dispatch.
-type testHandler struct {
-	respMTI string
-}
-
-func (h testHandler) Handle(msg *iso8583.Message) (*iso8583.Message, error) {
-	out := iso8583.NewMessage(iso.DiscoverSpec)
-	require.NoError(&testing.T{}, out.Marshal(&struct {
-		STAN         string `iso8583:"11"`
-		ResponseCode string `iso8583:"39"`
-	}{STAN: "123456", ResponseCode: "00"}))
-	out.MTI(h.respMTI)
-	return out, nil
-}
 
 // buildRequest is a test helper that creates an ISO 8583 message with
 // a specific MTI and STAN.
@@ -42,7 +29,7 @@ func TestRegistry_Dispatch0800(t *testing.T) {
 	reg := iso.NewHandlerRegistry()
 	req := buildRequest(t, "0800", "123456")
 
-	resp, err := reg.Dispatch("0800", req)
+	resp, err := reg.Dispatch("0800", req, zerolog.Nop())
 	require.NoError(t, err)
 
 	mti, err := resp.GetMTI()
@@ -62,7 +49,7 @@ func TestRegistry_DispatchUnknown0300(t *testing.T) {
 	reg := iso.NewHandlerRegistry()
 	req := buildRequest(t, "0300", "654321")
 
-	resp, err := reg.Dispatch("0300", req)
+	resp, err := reg.Dispatch("0300", req, zerolog.Nop())
 	require.NoError(t, err)
 
 	mti, err := resp.GetMTI()

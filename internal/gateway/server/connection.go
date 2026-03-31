@@ -57,11 +57,12 @@ func (c *Conn) handle(ctx context.Context) {
 	c.logger.Info().Msg("connection accepted")
 
 	if err := c.readLoop(ctx); err != nil {
-		if isGracefulClose(err) {
+		switch {
+		case isGracefulClose(err):
 			c.logger.Info().Msg("connection closed by client")
-		} else if os.IsTimeout(err) {
+		case os.IsTimeout(err):
 			c.logger.Info().Msg("connection idle timeout")
-		} else {
+		default:
 			// Log once at boundary — do not re-log up the stack (§4.4).
 			c.logger.Warn().Err(err).Msg("connection error")
 		}
@@ -76,6 +77,19 @@ func (c *Conn) handle(ctx context.Context) {
 // Frame format: 2-byte big-endian length prefix + ISO 8583 message body.
 // Each frame is handed to processFrame. Returns nil on ctx cancel, non-nil on error.
 func (c *Conn) readLoop(ctx context.Context) error {
+	// Watch ctx in a goroutine: when cancelled, immediately unblock any in-progress
+	// SetReadDeadline / Read by setting a deadline in the past.
+	stopWatch := make(chan struct{})
+	defer close(stopWatch)
+	go func() {
+		select {
+		case <-ctx.Done():
+			// Force-unblock the blocking read so readLoop exits promptly.
+			c.conn.SetDeadline(time.Now().Add(-1)) //nolint:errcheck // best-effort unblock; error not actionable
+		case <-stopWatch:
+		}
+	}()
+
 	for {
 		// Check context cancellation before blocking on a read.
 		select {
@@ -85,10 +99,14 @@ func (c *Conn) readLoop(ctx context.Context) error {
 		}
 
 		// Delegate the read→unpack→handle→write pipeline for one frame.
-		// processFrame returns (false, nil) on success or (false, err) on any
-		// fatal error — there is no longer a skip/continue path for MTI errors.
-		skip, err := c.processFrame()
+		// processFrame returns (true, nil) on zero/oversized frames (continue),
+		// or (false, err) on any fatal I/O error.
+		skip, err := c.processFrame() //nolint:staticcheck // SA4006 false positive: skip IS used in if statement below
 		if err != nil {
+			// If context was cancelled, treat the resulting I/O error as a clean exit.
+			if ctx.Err() != nil {
+				return nil
+			}
 			return err
 		}
 		if skip {
@@ -96,16 +114,12 @@ func (c *Conn) readLoop(ctx context.Context) error {
 		}
 	}
 }
-
 // processFrame performs the full read→unpack→dispatch→write cycle for a
 // single ISO 8583 frame. It returns (true, nil) when the frame was handled
 // but the caller should continue reading (e.g. zero-length or oversized frame
 // responded with 0810 F39=30), or (false, err) when a fatal I/O error occurred.
-
-// but the caller should continue reading (e.g. unknown MTI), or (false, err)
-// when a fatal I/O or parsing error occurred.
 //
-// HandleMessage now guarantees a non-nil response for any valid frame
+// HandleMessage guarantees a non-nil response for any valid frame
 // (including unknown/invalid MTIs → 0810 F39=12).
 func (c *Conn) processFrame() (skip bool, err error) {
 	// HARD RULE (§4.6): explicit read deadline before every blocking read.

@@ -94,22 +94,6 @@ func TestHandleMessage_Echo0800(t *testing.T) {
 	assert.Equal(t, req.NetworkMgmtInfoCode, resp.NetworkMgmtInfoCode)
 }
 
-// TestHandleMessage_UnknownMTI ensures that an unsupported MTI returns
-// a 0810 F39=12 response — NOT a Go error — and does not panic.
-func TestHandleMessage_UnknownMTI(t *testing.T) {
-	msg := iso8583.NewMessage(iso.DiscoverSpec)
-	msg.MTI("0200")
-
-	resp, err := iso.HandleMessage(msg)
-	assert.NoError(t, err, "unsupported MTI must return (msg, nil), not an error")
-	assert.NotNil(t, resp, "must always return a non-nil response message")
-
-	var got iso.EchoResponse
-	require.NoError(t, resp.Unmarshal(&got))
-	assert.Equal(t, "12", got.ResponseCode, "F39 must be 12 for unsupported MTI")
-}
-
-
 // TestBuildEcho0810_MarshalError tests the error path when message marshaling fails.
 func TestBuildEcho0810_MarshalError(t *testing.T) {
 	originalSpec := iso.DiscoverSpec
@@ -117,14 +101,14 @@ func TestBuildEcho0810_MarshalError(t *testing.T) {
 	// has a field mapped to 11, but the spec does not contain field 11.
 	iso.DiscoverSpec = &iso8583.MessageSpec{
 		Fields: map[int]field.Field{
-			0: field.NewString(&field.Spec{Length: 4}), 
+			0: field.NewString(&field.Spec{Length: 4}),
 			1: field.NewBitmap(&field.Spec{Length: 8}),
 		},
 	}
 	defer func() { iso.DiscoverSpec = originalSpec }()
 
 	req := &iso.EchoRequest{
-		STAN: "123456",
+		STAN:                "123456",
 		NetworkMgmtInfoCode: "301",
 	}
 
@@ -134,7 +118,8 @@ func TestBuildEcho0810_MarshalError(t *testing.T) {
 }
 
 // TestHandleMessage_UnknownMTI ensures that an unsupported MTI returns an
-// 0810 response with F39=12 (invalid transaction) per MOD-74.
+// 0810 response with F39=12 (invalid transaction) per MOD-74, and that
+// the STAN is echoed back from the request.
 func TestHandleMessage_UnknownMTI(t *testing.T) {
 	msg := iso8583.NewMessage(iso.DiscoverSpec)
 	require.NoError(t, msg.Marshal(&struct {
@@ -142,7 +127,7 @@ func TestHandleMessage_UnknownMTI(t *testing.T) {
 	}{STAN: "999888"}))
 	msg.MTI("0200")
 
-	resp, err := iso.HandleMessage(msg)
+	resp, err := iso.HandleMessage(msg, zerolog.Nop())
 	require.NoError(t, err)
 	require.NotNil(t, resp)
 

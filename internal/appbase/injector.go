@@ -15,12 +15,12 @@ import (
 func NewInjector(name string, cfg *Config) *do.Injector {
 	i := do.New()
 
-	//Config
+	// Config
 	do.Provide(i, func(_ *do.Injector) (*Config, error) {
 		return cfg, nil
 	})
 
-	//GCP Secret Manager client
+	// GCP Secret Manager client
 	do.Provide(i, func(_ *do.Injector) (secretvault.KeyResolver, error) {
 		return gcpSecretMgr.NewGcpSecretService(context.Background(), cfg.GCPProjectID)
 	})

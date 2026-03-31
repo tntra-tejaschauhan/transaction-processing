@@ -9,28 +9,35 @@ import (
 
 var defaultRegistry = NewHandlerRegistry()
 
-// HandleMessage receives a parsed, unpacked ISO 8583 message and returns an
-// appropriate response message.
+// HandleMessage receives a parsed, unpacked ISO 8583 message and a logger,
+// and returns an appropriate response message.
 //
 // Routing is done by MTI:
+//   - MTI format invalid (not exactly 4 numeric digits) → 0810 F39=12, nil error
 //   - "0800" → BuildEcho0810  (Network Management Request → Response)
-//   - "0100" → BuildAuth0110  (Authorization Request → Response)
-//   - anything else → descriptive error
+//   - "0100" → handleAuthRequest with logger (PCI-masked PAN logging)
+//   - "0120" → PostAuthHandler stub → 0130 F39=00
+//   - "0400" → ReversalHandler stub → 0410 F39=00
 //   - unrecognised MTI (e.g. "9999") → 0810 F39=12, nil error
 //
 // The caller is responsible for packing the returned message and writing it
 // to the TCP connection via NetworkHeader framing.
-func HandleMessage(msg *iso8583.Message) (*iso8583.Message, error) {
-	// mti, _ := msg.GetMTI()
+func HandleMessage(msg *iso8583.Message, logger zerolog.Logger) (*iso8583.Message, error) {
 	mti, err := msg.GetMTI()
 	if err != nil {
 		return nil, fmt.Errorf("HandleMessage: get MTI: %w", err)
 	}
-	
 
-	return defaultRegistry.Dispatch(mti, msg)
+	// MOD-72: reject MTIs that are not exactly 4 ASCII decimal digits.
+	if !validateMTI(mti) {
+		return buildErrorResponse(msg, "12")
+	}
+
+	// MOD-73: 0100 auth requests need a logger for PCI-masked PAN logging.
+	// This is achieved by passing the logger to Dispatch, which injects
+	// it into any handler that implements LoggerAwareHandler (e.g. AuthHandler).
+	return defaultRegistry.Dispatch(mti, msg, logger)
 }
-
 
 // validateMTI reports whether mti is exactly 4 ASCII decimal digit characters.
 // Non-numeric characters, wrong length, or empty strings all return false.
@@ -61,47 +68,4 @@ func buildErrorResponse(_ *iso8583.Message, responseCode string) (*iso8583.Messa
 	return msg, nil
 }
 
-// handleEchoRequest processes an 0800 Network Management Request.
-func handleEchoRequest(msg *iso8583.Message) (*iso8583.Message, error) {
-	var req EchoRequest
-	
-	// _ = msg.Unmarshal(&req)
-	if err := msg.Unmarshal(&req); err != nil {
-		return nil, fmt.Errorf("handleEchoRequest: unmarshal 0800: %w", err)
-	}
 
-	// resp, _ := BuildEcho0810(&req)
-	resp, err := BuildEcho0810(&req)
-	if err != nil {
-		return nil, fmt.Errorf("handleEchoRequest: build 0810: %w", err)
-	}
-
-	return resp, nil
-}
-
-// handleAuthRequest processes a 0100 Authorization Request.
-//
-// PCI rule: F2 (PAN) is logged as a masked value via MaskPAN. F52 (PIN Block)
-// is never logged. The // nolint:gosec comments below mark the intentional,
-// controlled handling of PAN and PIN Block for processing purposes only.
-func handleAuthRequest(msg *iso8583.Message, logger zerolog.Logger) (*iso8583.Message, error) {
-	var req AuthRequest
-	if err := msg.Unmarshal(&req); err != nil {
-		return nil, fmt.Errorf("handleAuthRequest: unmarshal 0100: %w", err)
-	}
-
-	// PCI requirement: log PAN in masked form only — never log plaintext PAN.
-	// MaskPAN returns "411111******1111" style for 16-digit PANs.
-	logger.Debug().
-		Str("pan", MaskPAN(req.PAN)). //nolint:gosec // PAN masked before logging; plaintext never written to log
-		Str("stan", req.STAN).
-		Str("terminal_id", req.TerminalID).
-		Msg("auth request received")
-
-	resp, err := BuildAuth0110(&req)
-	if err != nil {
-		return nil, fmt.Errorf("handleAuthRequest: build 0110: %w", err)
-	}
-
-	return resp, nil
-}

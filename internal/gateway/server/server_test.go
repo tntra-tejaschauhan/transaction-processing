@@ -31,6 +31,8 @@ func testOptions(t interface{ Helper() }) *ServerOptions {
 		WriteTimeout:    2 * time.Second,
 		MaxConnections:  10,
 		ShutdownTimeout: 2 * time.Second,
+		BufSize:         8192,
+		IdleTimeout:     10 * time.Second,
 	}
 }
 
@@ -213,29 +215,31 @@ func (s *testSuiteServer) TestStop_DrainWithinShutdownTimeout() {
 }
 
 func (s *testSuiteServer) TestStop_Timeout() {
-	s.Run("when connections do not drain then Stop times out", func() {
+	s.Run("when Stop is called then all connections exit promptly via context cancellation", func() {
 		opts := testOptions(s.T())
-		opts.ShutdownTimeout = 50 * time.Millisecond // very short timeout
-		opts.IdleTimeout = 2 * time.Second           // long enough so read blocks and doesn't exit immediately 
+		opts.ShutdownTimeout = 50 * time.Millisecond
+		opts.IdleTimeout = 10 * time.Second // long idle so connection blocks on read
+		opts.ReadTimeout = 5 * time.Second
 		srv, err := New(opts, testLogger())
 		s.Require().NoError(err)
-		
+
 		s.Require().NoError(srv.Start(context.Background()))
-		
+
 		// Create a connection that never sends anything.
-		// It will block in handleConn -> readLoop.
 		conn, err := net.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", opts.Port))
 		s.Require().NoError(err)
 		defer conn.Close()
-		
+
 		time.Sleep(30 * time.Millisecond) // Let it be accepted
-		
-		// The server's handleConn is blocked reading. Stop will time out.
+
+		// Stop() cancels the context, which triggers the deadline-watcher in readLoop
+		// to unblock the connection. Stop() should return well within 2 seconds.
 		start := time.Now()
 		srv.Stop()
 		elapsed := time.Since(start)
-		
-		s.Assert().GreaterOrEqual(elapsed, opts.ShutdownTimeout)
+
+		s.Assert().Less(elapsed, 2*time.Second,
+			"Stop() must return promptly when context cancellation unblocks connections")
 	})
 }
 

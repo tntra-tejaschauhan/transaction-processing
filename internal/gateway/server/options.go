@@ -30,8 +30,8 @@ type ServerOptions struct {
 	// BufSize is the size of the bufio.Reader buffer used for each connection.
 	// Configurable via GATEWAY_BUF_SIZE env var. Default: 8192 bytes.
 	BufSize int
-	// IdleTimeout is the maximum time to wait for a connected client to 
-	// commence a new request (i.e. to send the 2-byte header). If no request 
+	// IdleTimeout is the maximum time to wait for a connected client to
+	// commence a new request (i.e. to send the 2-byte header). If no request
 	// is initiated within this window, the server closes the connection.
 	IdleTimeout time.Duration
 }
@@ -83,6 +83,7 @@ func (o *ServerOptions) validate() error {
 	}
 	if o.BufSize <= 0 {
 		return fmt.Errorf("buf_size must be positive, got %d", o.BufSize)
+	}
 	if o.IdleTimeout <= o.ReadTimeout {
 		return fmt.Errorf("idle_timeout_ms (%d) must be greater than read_timeout_ms (%d) to ensure consistent timeout enforcement", o.IdleTimeout.Milliseconds(), o.ReadTimeout.Milliseconds())
 	}

@@ -37,8 +37,8 @@ func (fakeDriver) Open(name string) (driver.Conn, error) {
 }
 
 func (c *fakeConn) Prepare(_ string) (driver.Stmt, error) { return fakeStmt{}, nil }
-func (c *fakeConn) Close() error                           { return nil }
-func (c *fakeConn) Begin() (driver.Tx, error)              { return &fakeTx{conn: c}, nil }
+func (c *fakeConn) Close() error                          { return nil }
+func (c *fakeConn) Begin() (driver.Tx, error)             { return &fakeTx{conn: c}, nil }
 
 func (t *fakeTx) Commit() error {
 	if t.conn.shouldFail {
@@ -55,15 +55,15 @@ func (t *fakeTx) Rollback() error {
 	return nil
 }
 
-func (fakeStmt) Close() error                                    { return nil }
-func (fakeStmt) NumInput() int                                   { return 0 }
-func (fakeStmt) Exec(_ []driver.Value) (driver.Result, error)   { return fakeResult{}, nil }
-func (fakeStmt) Query(_ []driver.Value) (driver.Rows, error)    { return &fakeRows{}, nil }
-func (fakeResult) LastInsertId() (int64, error)                  { return 0, nil }
-func (fakeResult) RowsAffected() (int64, error)                  { return 1, nil }
-func (r *fakeRows) Columns() []string                            { return nil }
-func (r *fakeRows) Close() error                                 { return nil }
-func (r *fakeRows) Next(_ []driver.Value) error                  { return io.EOF }
+func (fakeStmt) Close() error                                 { return nil }
+func (fakeStmt) NumInput() int                                { return 0 }
+func (fakeStmt) Exec(_ []driver.Value) (driver.Result, error) { return fakeResult{}, nil }
+func (fakeStmt) Query(_ []driver.Value) (driver.Rows, error)  { return &fakeRows{}, nil }
+func (fakeResult) LastInsertId() (int64, error)               { return 0, nil }
+func (fakeResult) RowsAffected() (int64, error)               { return 1, nil }
+func (r *fakeRows) Columns() []string                         { return nil }
+func (r *fakeRows) Close() error                              { return nil }
+func (r *fakeRows) Next(_ []driver.Value) error               { return io.EOF }
 
 func init() {
 	sql.Register("fakedb", fakeDriver{})

@@ -19,10 +19,10 @@ const (
 //	  "correlation_id": "uuid-string"
 //	}
 type Envelope struct {
-	Status        string     `json:"status"`
-	Data          any        `json:"data"`
-	Error         *APIError  `json:"error"`
-	CorrelationID string     `json:"correlation_id"`
+	Status        string    `json:"status"`
+	Data          any       `json:"data"`
+	Error         *APIError `json:"error"`
+	CorrelationID string    `json:"correlation_id"`
 }
 
 // Success returns an Envelope with status "success", the supplied data payload,

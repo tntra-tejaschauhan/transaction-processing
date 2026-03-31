@@ -154,7 +154,6 @@ func (s *testSuiteServerOptions) TestNewServerOptions_InvalidTimeouts() {
 
 func (s *testSuiteServerOptions) TestNewServerOptions_InvalidMaxConnections() {
 	s.Run("when max_connections is negative then error is returned", func() {
-		path := s.writeConfig("port: 8583\nread_timeout_ms: 1000\nwrite_timeout_ms: 1000\nmax_connections: -1\nshutdown_timeout_ms: 1000\nbuf_size: 8192\n")
 		path := s.writeConfig("port: 8583\nread_timeout_ms: 1000\nwrite_timeout_ms: 1000\nmax_connections: -1\nshutdown_timeout_ms: 1000\nidle_timeout_ms: 5000\n")
 
 		_, err := NewServerOptions(path)
@@ -166,7 +165,7 @@ func (s *testSuiteServerOptions) TestNewServerOptions_InvalidMaxConnections() {
 
 func (s *testSuiteServerOptions) TestNewServerOptions_InvalidBufSize() {
 	s.Run("when buf_size is non-positive then error is returned", func() {
-		path := s.writeConfig("port: 8583\nread_timeout_ms: 1000\nwrite_timeout_ms: 1000\nmax_connections: 1\nshutdown_timeout_ms: 1000\nbuf_size: 0\n")
+		path := s.writeConfig("port: 8583\nread_timeout_ms: 1000\nwrite_timeout_ms: 1000\nmax_connections: 1\nshutdown_timeout_ms: 1000\nidle_timeout_ms: 5000\nbuf_size: -1\n")
 
 		_, err := NewServerOptions(path)
 
@@ -191,7 +190,6 @@ func (s *testSuiteServerOptions) TestNewServerOptions_InvalidIdleTimeout() {
 
 func (s *testSuiteServerOptions) TestNewServerOptions_ErrorWrapping() {
 	s.Run("when validation fails then error is prefixed with server options context", func() {
-		path := s.writeConfig("port: -1\nread_timeout_ms: 1000\nwrite_timeout_ms: 1000\nmax_connections: 1\nshutdown_timeout_ms: 1000\nbuf_size: 8192\n")
 		path := s.writeConfig("port: -1\nread_timeout_ms: 1000\nwrite_timeout_ms: 1000\nmax_connections: 1\nshutdown_timeout_ms: 1000\nidle_timeout_ms: 5000\n")
 
 		_, err := NewServerOptions(path)

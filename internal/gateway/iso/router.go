@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/moov-io/iso8583"
+	"github.com/rs/zerolog"
 )
 
 // MessageHandler defines the interface for processing a specific ISO 8583
@@ -11,6 +12,11 @@ import (
 // apply business logic (or stubs), and return a response message.
 type MessageHandler interface {
 	Handle(msg *iso8583.Message) (*iso8583.Message, error)
+}
+
+// LoggerAwareHandler allows a MessageHandler to receive a per-request logger.
+type LoggerAwareHandler interface {
+	WithLogger(logger zerolog.Logger) MessageHandler
 }
 
 // HandlerRegistry holds MTI -> handler mappings. It implements an extensibility
@@ -43,11 +49,15 @@ func (r *HandlerRegistry) Register(mti string, handler MessageHandler) {
 }
 
 // Dispatch finds the registered handler for the given MTI and delegates
-// the message handling to it. If no handler is registered for the MTI,
+// the message handling to it. If the handler implements LoggerAwareHandler,
+// it injects the logger via WithLogger. If no handler is registered,
 // it falls back to buildUnsupportedMTI0810 to return a protocol error.
-func (r *HandlerRegistry) Dispatch(mti string, msg *iso8583.Message) (*iso8583.Message, error) {
+func (r *HandlerRegistry) Dispatch(mti string, msg *iso8583.Message, logger zerolog.Logger) (*iso8583.Message, error) {
 	handler, ok := r.handlers[mti]
 	if ok {
+		if lh, ok := handler.(LoggerAwareHandler); ok {
+			handler = lh.WithLogger(logger)
+		}
 		return handler.Handle(msg)
 	}
 

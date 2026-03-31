@@ -18,14 +18,14 @@ type hsmCryptoService struct {
 func NewHSMCryptoService(resolver secretvault.KeyResolver) HSMCryptoService {
 	return &hsmCryptoService{
 		resolver: resolver,
-		keyCache: make(map[string]string, 8), //In the future we will use a Redis Cache, passed from the injector here.
+		keyCache: make(map[string]string, 8), // In the future we will use a Redis Cache, passed from the injector here.
 	}
 }
 
 // resolveKey returns the base64-encoded key for keyName, fetching from the secret vault on first
 // use and caching the string thereafter. The base64 value is passed directly to pkg/crypto
 func (s *hsmCryptoService) resolveKey(ctx context.Context, name string) (string, error) {
-	//check the cache first
+	// check the cache first
 	s.mu.RLock()
 	key, ok := s.keyCache[name]
 	s.mu.RUnlock()
@@ -40,7 +40,7 @@ func (s *hsmCryptoService) resolveKey(ctx context.Context, name string) (string,
 		return key, nil
 	}
 
-	//get the key from the secret vault
+	// get the key from the secret vault
 	secretValue, err := s.resolver.GetSecretValue(ctx, name)
 	if err != nil {
 		return "", fmt.Errorf("hsm: resolve key %q: %w", name, err)
