@@ -7,7 +7,7 @@ require (
 	github.com/ProtonMail/go-crypto v1.4.1
 	github.com/googleapis/gax-go/v2 v2.19.0
 	github.com/ilyakaznacheev/cleanenv v1.5.0
-	github.com/jackc/pgx/v5 v5.8.0
+	github.com/jackc/pgx/v5 v5.9.0
 	github.com/microsoft/go-mssqldb v1.9.8
 	github.com/moov-io/iso8583 v0.25.3
 	github.com/moov-io/iso8583-connection v0.9.0
